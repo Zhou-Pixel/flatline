@@ -10,37 +10,28 @@ pub mod code {
     pub const SSH_MSG_KEXINIT: u8 = 20;
     pub const SSH_MSG_NEWKEYS: u8 = 21;
 
-    /* diffie-hellman-group1-sha1 */
     pub const SSH_MSG_KEXDH_INIT: u8 = 30;
     pub const SSH_MSG_KEXDH_REPLY: u8 = 31;
 
-    /* diffie-hellman-group-exchange-sha1 and
-    diffie-hellman-group-exchange-sha256 */
     pub const SSH_MSG_KEX_DH_GEX_REQUEST_OLD: u8 = 30;
     pub const SSH_MSG_KEX_DH_GEX_REQUEST: u8 = 34;
     pub const SSH_MSG_KEX_DH_GEX_GROUP: u8 = 31;
     pub const SSH_MSG_KEX_DH_GEX_INIT: u8 = 32;
     pub const SSH_MSG_KEX_DH_GEX_REPLY: u8 = 33;
 
-    /* ecdh */
     pub const SSH2_MSG_KEX_ECDH_INIT: u8 = 30;
     pub const SSH2_MSG_KEX_ECDH_REPLY: u8 = 31;
 
-    /* User Authentication */
     pub const SSH_MSG_USERAUTH_REQUEST: u8 = 50;
     pub const SSH_MSG_USERAUTH_FAILURE: u8 = 51;
     pub const SSH_MSG_USERAUTH_SUCCESS: u8 = 52;
     pub const SSH_MSG_USERAUTH_BANNER: u8 = 53;
 
-    /* "public key" method */
     pub const SSH_MSG_USERAUTH_PK_OK: u8 = 60;
-    /* "password" method */
     pub const SSH_MSG_USERAUTH_PASSWD_CHANGEREQ: u8 = 60;
-    /* "keyboard-interactive" method */
     pub const SSH_MSG_USERAUTH_INFO_REQUEST: u8 = 60;
     pub const SSH_MSG_USERAUTH_INFO_RESPONSE: u8 = 61;
 
-    /* Channels */
     pub const SSH_MSG_GLOBAL_REQUEST: u8 = 80;
     pub const SSH_MSG_REQUEST_SUCCESS: u8 = 81;
     pub const SSH_MSG_REQUEST_FAILURE: u8 = 82;
@@ -63,10 +54,10 @@ pub mod code {
     // pub const SSH_MSG_KEX_DH_GEX_INIT: u8 =         32;
     // pub const SSH_MSG_KEX_DH_GEX_REPLY: u8 =        33;
 
-    pub const SSH_OPEN_ADMINISTRATIVELY_PROHIBITED: u8 = 1;
-    pub const SSH_OPEN_CONNECT_FAILED: u8 = 2;
-    pub const SSH_OPEN_UNKNOWN_CHANNELTYPE: u8 = 3;
-    pub const SSH_OPEN_RESOURCE_SHORTAGE: u8 = 4;
+    pub const SSH_OPEN_ADMINISTRATIVELY_PROHIBITED: u32 = 1;
+    pub const SSH_OPEN_CONNECT_FAILED: u32 = 2;
+    pub const SSH_OPEN_UNKNOWN_CHANNELTYPE: u32 = 3;
+    pub const SSH_OPEN_RESOURCE_SHORTAGE: u32 = 4;
 
     // pub const SSH_MSG_USERAUTH_REQUEST: u8 =            50;
     // pub const SSH_MSG_USERAUTH_FAILURE: u8 =            51;

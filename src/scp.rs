@@ -11,7 +11,7 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<usize> {
+    pub async fn send(&mut self, data: impl Into<Vec<u8>>) -> Result<usize> {
         self.channel.write(data).await
     }
 

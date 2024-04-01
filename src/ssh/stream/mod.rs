@@ -9,7 +9,7 @@ use std::{
 //     async fn recv_packet(&mut self) -> SshResult<Packet>;
 // }
 
-use super::packet::Packet;
+use super::{common::PACKET_MAXIMUM_SIZE, packet::Packet};
 
 use crate::{cipher::compress::Encode, error::Error};
 use crate::{
@@ -68,7 +68,6 @@ use crate::{
 };
 
 use super::common::{code::*, PAYLOAD_MAXIMUM_SIZE};
-
 
 pub struct BufferStream<T>
 where
@@ -262,8 +261,7 @@ where
     }
 
     pub async fn send_new_keys(&mut self) -> Result<()> {
-        self.send_payload(&[SSH_MSG_NEWKEYS])
-            .await?;
+        self.send_payload(&[SSH_MSG_NEWKEYS]).await?;
         if self.client.kex_strict && self.server.kex_strict {
             self.server.sequence_number = 0;
             self.client.sequence_number = 0;
@@ -274,11 +272,13 @@ where
     pub async fn recv_packet(&mut self) -> Result<Packet> {
         let size = self.stream.read_exact(size_of::<u32>()).await?;
 
-
         let mut size = Buffer::from_vec(size);
-        let size = size
-            .take_u32()
-            .ok_or(Error::invalid_format("not enough data"))?;
+        let size = size.take_u32().unwrap();
+        if size as usize > PACKET_MAXIMUM_SIZE - 4 {
+            return Err(Error::invalid_format(format!(
+                "invalid packet length: {size}"
+            )));
+        }
 
         let data = self.stream.read_exact(size as _).await?;
 
@@ -388,7 +388,6 @@ where
     T: AsyncRead + AsyncWrite + Unpin + Send,
 {
     pub async fn send_new_keys(&mut self) -> Result<()> {
-
         self.send_payload(&[SSH_MSG_NEWKEYS]).await?;
         if self.client.kex_strict && self.server.kex_strict {
             self.client.sequence_number = 0;
@@ -443,6 +442,12 @@ where
             let mut aad = Buffer::from_vec(aad);
             let size = aad.take_u32().unwrap();
 
+            if size as usize > PACKET_MAXIMUM_SIZE - 4 {
+                return Err(Error::invalid_format(format!(
+                    "invalid packet length: {size}"
+                )));
+            }
+
             let left = self.stream.read_exact(size as usize).await?;
             cipher_text.extend(left.clone());
 
@@ -476,6 +481,12 @@ where
 
             let packet_len = packet_len.take_u32().unwrap();
 
+            if packet_len as usize > PACKET_MAXIMUM_SIZE - 4 {
+                return Err(Error::invalid_format(format!(
+                    "invalid packet length: {packet_len}"
+                )));
+            }
+
             cipher_text = self.stream.read_exact(packet_len as usize).await?;
 
             let mut plaint_text = vec![];
@@ -499,6 +510,13 @@ where
 
             // 所有block都大于等于8, 直接使用unwrap
             let pakcet_size = buffer_first.take_u32().unwrap() as u32;
+
+            if pakcet_size as usize > PACKET_MAXIMUM_SIZE - 4 {
+                return Err(Error::invalid_format(format!(
+                    "invalid packet length: {pakcet_size}"
+                )));
+            }
+            
 
             let left = self
                 .stream

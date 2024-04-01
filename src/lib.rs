@@ -5,9 +5,9 @@ pub mod sftp;
 pub mod channel;
 pub mod scp;
 pub mod handshake;
+pub mod keys;
 mod ssh;
 mod project;
-mod keys;
 
 #[cfg(test)]
 mod test;
@@ -17,7 +17,7 @@ use async_channel::Sender;
 use error::Result;
 use session::Userauth;
 use channel::Channel;
-use session::ExitStatus;
+use session::{ExitStatus, Signal};
 use sftp::Sftp;
 pub use openssl;
 pub use cipher::{
@@ -87,6 +87,17 @@ enum Request {
         id: u32,
         data: Vec<u8>,
         sender: Sender<Result<usize>>,
+    },
+    ChannelSetEnv {
+        id: u32,
+        name: String,
+        value: Vec<u8>,
+        sender: Sender<Result<()>>,
+    },
+    ChannelSendSignal {
+        id: u32,
+        signal: Signal,
+        sender: Sender<Result<()>>,
     },
     ChannelEof {
         id: u32,

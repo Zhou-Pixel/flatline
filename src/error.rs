@@ -3,6 +3,8 @@ use std::{io, string::FromUtf8Error};
 use openssl::error::ErrorStack;
 use thiserror::Error;
 
+use crate::session::ChannelOpenFailureReson;
+
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -43,9 +45,9 @@ pub enum Error {
     MacVerificationFailed,
 
     #[error("Channel open failed")]
-    ChannelOpenFail,
+    ChannelOpenFail(ChannelOpenFailureReson, String),
 
-    #[error("Channel exec failed")]
+    #[error("Channel failed")]
     ChannelFailure,
 
     // #[error("internal error: failed to find channel")]
@@ -61,7 +63,7 @@ pub enum Error {
     HostKeyVerifyFailed,
 
     #[error("failed to startup sftp")]
-    SFtpStartupFailed,
+    SubsystemFailed,
 
     #[error("Resource is temporarily unavailable")]
     TemporarilyUnavailable,

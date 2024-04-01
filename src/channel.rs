@@ -1,11 +1,15 @@
+
 use async_channel::{Receiver, Sender, TryRecvError};
 use derive_new::new;
 
+use crate::session::Signal;
+
 use super::session::ExitStatus;
 
+use super::error::{Error, Result};
 use super::Request;
 use super::SubSystem;
-use super::error::{Result, Error};
+
 
 
 #[derive(new)]
@@ -34,36 +38,33 @@ impl Drop for Channel {
 }
 
 use super::scp::Sender as ScpSender;
-use super::sftp::{Timestamp, Permissions};
+use super::sftp::{Permissions, Timestamp};
 
 impl Channel {
-
-
     // pub async fn scp_receiver(mut self, path: &str) -> Result<()> {
-
 
     //     todo!()
     // }
 
-    pub async fn scp_sender(mut self, path: &str, size: usize, permissions: Permissions, time: Option<Timestamp>) -> Result<ScpSender> {
-
-
+    pub async fn scp_sender(
+        mut self,
+        path: &str,
+        size: usize,
+        permissions: Permissions,
+        time: Option<Timestamp>,
+    ) -> Result<ScpSender> {
         let cmd = match time {
             Some(_) => format!("scp -pt {}", path),
             None => format!("scp -t {}", path),
-        }; 
-
+        };
 
         self.exec(cmd).await?;
-
 
         let response = self.read().await?;
 
         if response.len() != 1 || response[0] != 0 {
             return Err(Error::invalid_format("invalid scp response"));
         }
-
-
 
         if let Some(time) = time {
             let send = format!("T{} 0 {} 0\n", time.mtime, time.atime);
@@ -73,17 +74,12 @@ impl Channel {
             if response.len() != 1 || response[0] != 0 {
                 return Err(Error::invalid_format("invalid scp response"));
             }
-
-
-
-
         }
-        
+
         let filename = path.split('/').last().unwrap_or(path);
         let send = format!("C0{:0o} {} {}\n", permissions.bits(), size, filename);
-        
-        self.write(send).await?;
 
+        self.write(send).await?;
 
         let response = self.read().await?;
 
@@ -91,12 +87,7 @@ impl Channel {
             return Err(Error::invalid_format("invalid scp response"));
         }
 
-
-
-
         Ok(ScpSender::new(self))
-
-
     }
 
     pub async fn close(mut self) -> Result<()> {
@@ -107,18 +98,48 @@ impl Channel {
             sender,
         })
         .await?;
-        recver.recv().await.map_err(|_| Error::Disconnect)?
+        let res = recver.recv().await.map_err(|_| Error::Disconnect)?;
+        res
+    }
+
+    pub async fn send_signal(&mut self, signal: Signal) -> Result<()> {
+        let (sender, recver) = async_channel::bounded(1);
+        let request = Request::ChannelSendSignal { id: self.id, signal, sender };        
+
+        self.send_request(request).await?;
+
+        recver.recv().await.map_err(|_| Error::ChannelClosed)?
+    }
+
+    pub async fn set_env(
+        &mut self,
+        name: impl Into<String>,
+        value: impl Into<Vec<u8>>,
+    ) -> Result<()> {
+        let name = name.into();
+        let value = value.into();
+        let (sender, recver) = async_channel::bounded(1);
+        let request = Request::ChannelSetEnv {
+            id: self.id,
+            name,
+            value,
+            sender,
+        };
+
+        self.send_request(request).await?;
+
+        recver.recv().await.map_err(|_| Error::ChannelClosed)?
     }
 
     pub async fn exec(&self, cmd: impl Into<String>) -> Result<()> {
         let (sender, recver) = async_channel::bounded(1);
-        let resquest = Request::ChannelExec {
+        let request = Request::ChannelExec {
             id: self.id,
             cmd: cmd.into(),
             sender,
         };
 
-        self.send_request(resquest).await?;
+        self.send_request(request).await?;
 
         recver.recv().await.map_err(|_| Error::ChannelClosed)?
     }
@@ -200,7 +221,6 @@ impl Channel {
     }
 }
 
-
 pub(crate) struct Endpoint {
     pub(crate) id: u32,
     pub(crate) initial: u32,
@@ -222,7 +242,6 @@ impl Endpoint {
         }
     }
 }
-
 
 #[derive(new)]
 pub(crate) struct NormalChannel {

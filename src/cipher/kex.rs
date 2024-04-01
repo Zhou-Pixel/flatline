@@ -98,9 +98,6 @@ struct DiffieHellmanKeyExchange<'a> {
     // group_order: i32,
 }
 
-pub const DIFFIE_HELLMAN_KEY_EXCHANGE_INIT: u8 = 30;
-pub const DIFFIE_HELLMAN_KEY_EXCHANGE_REPLY: u8 = 31;
-
 #[derive(new)]
 pub struct Summary {
     // pub server_hostkey_type: String,
@@ -141,7 +138,7 @@ impl<'a> KeyExChange for DiffieHellmanKeyExchange<'a> {
         let mut buffer = Buffer::new();
         // let mut payload = vec![];
         // payload.push(DIFFIE_HELLMAN_KEY_EXCHANGE_INIT);
-        buffer.put_u8(DIFFIE_HELLMAN_KEY_EXCHANGE_INIT);
+        buffer.put_u8(SSH_MSG_KEXDH_INIT);
         buffer.put_one(&pub_key);
 
         // let dh_client = DHKeyExInit::new(pub_key);
@@ -159,7 +156,7 @@ impl<'a> KeyExChange for DiffieHellmanKeyExchange<'a> {
 
         // let code = ReadBytesExt::read_u8(&mut payload)?;
         let code = payload.take_u8().unwrap();
-        if code != DIFFIE_HELLMAN_KEY_EXCHANGE_REPLY {
+        if code != SSH_MSG_KEXDH_REPLY {
             return Err(Error::UnexpectMsg);
         }
 

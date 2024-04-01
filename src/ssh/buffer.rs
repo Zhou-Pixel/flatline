@@ -4,6 +4,7 @@ use byteorder::{ReadBytesExt, WriteBytesExt, BE};
 
 
 
+// todo: Improve performance
 #[derive(Default, Clone, Debug)]
 #[repr(transparent)]
 pub struct Buffer(Vec<u8>);

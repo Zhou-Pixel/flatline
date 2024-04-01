@@ -98,7 +98,6 @@ impl Drop for Gcm {
 }
 
 impl Gcm {
-
     fn get_ctx_mut(&mut self) -> Result<*mut ffi::CipherCtx> {
         if self.ctx.is_null() {
             return Err(Error::ub("uninitlize"));
@@ -278,8 +277,11 @@ impl Decrypt for Gcm {
             buf.resize(base + self.block_size, 0);
 
             let mut outlen: c_int = 0;
-            let res =
-                ffi::EVP_CipherFinal(self.get_ctx_mut()?, buf[base..].as_mut_ptr(), &mut outlen as *mut _);
+            let res = ffi::EVP_CipherFinal(
+                self.get_ctx_mut()?,
+                buf[base..].as_mut_ptr(),
+                &mut outlen as *mut _,
+            );
 
             ffi::cvt(res)?;
             buf.truncate(base + outlen as usize);
@@ -300,7 +302,6 @@ impl Decrypt for Gcm {
         Ok(())
     }
 
-
     fn enable_increase_iv(&mut self, enable: bool) {
         self.increase_iv = enable;
     }
@@ -308,8 +309,6 @@ impl Decrypt for Gcm {
     fn name(&self) -> &str {
         &self.name
     }
-
-
 }
 
 impl Encrypt for Gcm {
@@ -335,7 +334,6 @@ impl Encrypt for Gcm {
 
     fn initialize(&mut self, iv: &[u8], key: &[u8]) -> Result<()> {
         unsafe {
-
             let ctx = ffi::EVP_CIPHER_CTX_new();
             ffi::cvt_p(ctx)?;
 
@@ -404,8 +402,11 @@ impl Encrypt for Gcm {
             buf.resize(base + self.block_size, 0);
 
             let mut outlen: i32 = 0;
-            let res =
-                ffi::EVP_CipherFinal(self.get_ctx_mut()?, buf[base..].as_mut_ptr(), &mut outlen as *mut _);
+            let res = ffi::EVP_CipherFinal(
+                self.get_ctx_mut()?,
+                buf[base..].as_mut_ptr(),
+                &mut outlen as *mut _,
+            );
 
             ffi::cvt(res)?;
 
@@ -540,6 +541,7 @@ impl Encrypt for CbcCtr {
 #[derive(new)]
 pub struct CbcCtr {
     name: String,
+    #[new(default)]
     ctx: Option<CipherCtx>,
     has_tag: bool,
     has_aad: bool,
@@ -626,6 +628,15 @@ impl CbcCtr {
             args: CipherArgs::new(Cipher::aes_192_ctr(), 16, 24, 16),
         }
     }
+
+    fn des_ede3_cbc() -> Self {
+        Self::new(
+            "3des-cbc".to_string(),
+            false,
+            false,
+            CipherArgs::new(Cipher::des_ede3_cbc(), 8, 24, 8),
+        )
+    }
 }
 
 impl Decrypt for CbcCtr {
@@ -691,7 +702,6 @@ pub struct CipherArgs {
     iv_len: usize,
 }
 
-
 algo_list!(
     encrypt_all,
     new_encrypt_all,
@@ -705,6 +715,8 @@ algo_list!(
     "aes256-cbc" => CbcCtr::aes256_cbc(),
     "aes128-ctr" => CbcCtr::aes128_ctr(),
     "aes192-ctr" => CbcCtr::aes192_ctr(),
+    "rijndael-cbc@lysator.liu.se" => CbcCtr::aes256_cbc(),
+    "3des-cbc" => CbcCtr::des_ede3_cbc(),
 );
 
 algo_list!(
@@ -720,5 +732,6 @@ algo_list!(
     "aes256-cbc" => CbcCtr::aes256_cbc(),
     "aes128-ctr" => CbcCtr::aes128_ctr(),
     "aes192-ctr" => CbcCtr::aes192_ctr(),
+    "rijndael-cbc@lysator.liu.se" => CbcCtr::aes256_cbc(),
+    "3des-cbc" => CbcCtr::des_ede3_cbc(),
 );
-

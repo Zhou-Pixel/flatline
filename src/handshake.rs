@@ -378,7 +378,6 @@ pub(crate) fn match_method(
     for i in &client.en_server_to_client {
         if server.en_server_to_client.contains(i) {
             server_crypt = config.crypt_server_to_client.get(i);
-            // self.socket.cipher_stc = crypt::new_decryption_by_name(i).ok();
             break;
         }
     }
@@ -386,7 +385,6 @@ pub(crate) fn match_method(
     for i in &client.mac_client_to_server {
         if server.mac_client_to_server.contains(i) {
             client_mac = config.mac_client_to_server.get(i);
-            // self.socket.mac_cts = mac::new_mac_by_name(&i);
             break;
         }
     }
