@@ -2,183 +2,189 @@ use super::*;
 use derive_new::new;
 use openssl::{
     cipher::{Cipher, CipherRef},
-    cipher_ctx::CipherCtx,
+    cipher_ctx::CipherCtx, symm::{self, Crypter},
 };
-use std::ffi::c_int;
-
 use crate::error::{Error, Result};
 use indexmap::IndexMap;
 
-mod ffi {
-    use std::ffi::{c_int, c_uchar, c_void};
 
-    use openssl::error::ErrorStack;
+algo_list!(
+    encrypt_all,
+    new_encrypt_all,
+    new_encrypt_by_name,
+    dyn Encrypt + Send,
+    "aes256-gcm@openssh.com" => Gcm::aes256_gcm_openssh(),
+    "aes128-gcm@openssh.com" => Gcm::aes128_gcm_openssh(),
+    "aes256-ctr" => CbcCtr::aes256_ctr(),
+    "aes128-cbc" => CbcCtr::aes128_cbc(),
+    "aes192-cbc" => CbcCtr::aes192_cbc(),
+    "aes256-cbc" => CbcCtr::aes256_cbc(),
+    "aes128-ctr" => CbcCtr::aes128_ctr(),
+    "aes192-ctr" => CbcCtr::aes192_ctr(),
+    "rijndael-cbc@lysator.liu.se" => CbcCtr::aes256_cbc(),
+    "3des-cbc" => CbcCtr::des_ede3_cbc(),
+);
 
-    #[repr(C)]
-    pub struct CipherCtx {
-        _data: [u8; 0],
-    }
-
-    #[repr(C)]
-    pub struct Cipher {
-        _data: [u8; 0],
-    }
-    pub const EVP_CTRL_AEAD_SET_IV_FIXED: c_int = 0x12;
-    pub const EVP_CTRL_GCM_GET_TAG: c_int = 0x10;
-    pub const EVP_CTRL_GCM_IV_GEN: c_int = 0x13;
-    pub const EVP_CTRL_GCM_SET_TAG: c_int = 0x11;
-    extern "C" {
-        pub fn EVP_CIPHER_CTX_free(c: *mut CipherCtx);
-        pub fn EVP_aes_128_gcm() -> *const Cipher;
-        pub fn EVP_aes_256_gcm() -> *const Cipher;
-        pub fn EVP_EncryptInit(
-            cxt: *mut CipherCtx,
-            cipher: *const Cipher,
-            key: *const c_uchar,
-            iv: *const c_uchar,
-        ) -> c_int;
-        pub fn EVP_DecryptInit(
-            cxt: *mut CipherCtx,
-            cipher: *const Cipher,
-            key: *const c_uchar,
-            iv: *const c_uchar,
-        ) -> c_int;
-        pub fn EVP_CIPHER_CTX_ctrl(
-            ctx: *mut CipherCtx,
-            t: c_int,
-            arg: c_int,
-            ptr: *mut c_void,
-        ) -> c_int;
-        pub fn EVP_CipherUpdate(
-            ctx: *mut CipherCtx,
-            outbuf: *mut c_uchar,
-            outl: *mut c_int,
-            inbuf: *const c_uchar,
-            inl: c_int,
-        ) -> c_int;
-        pub fn EVP_CipherFinal(ctx: *mut CipherCtx, outm: *mut c_uchar, outl: *mut c_int) -> c_int;
-        pub fn EVP_CIPHER_CTX_new() -> *mut CipherCtx;
-        pub fn EVP_CIPHER_CTX_get_tag_length(ctx: *const CipherCtx) -> c_int;
-    }
-    pub fn cvt(r: c_int) -> Result<c_int, ErrorStack> {
-        if r <= 0 {
-            Err(ErrorStack::get())
-        } else {
-            Ok(r)
-        }
-    }
-    pub fn cvt_p<T>(r: *mut T) -> Result<*mut T, ErrorStack> {
-        if r.is_null() {
-            Err(ErrorStack::get())
-        } else {
-            Ok(r)
-        }
-    }
-}
+algo_list!(
+    decrypt_all,
+    new_decrypt_all,
+    new_decrypt_by_name,
+    dyn Decrypt + Send,
+    "aes256-gcm@openssh.com" => Gcm::aes256_gcm_openssh(),
+    "aes128-gcm@openssh.com" => Gcm::aes128_gcm_openssh(),
+    "aes256-ctr" => CbcCtr::aes256_ctr(),
+    "aes128-cbc" => CbcCtr::aes128_cbc(),
+    "aes192-cbc" => CbcCtr::aes192_cbc(),
+    "aes256-cbc" => CbcCtr::aes256_cbc(),
+    "aes128-ctr" => CbcCtr::aes128_ctr(),
+    "aes192-ctr" => CbcCtr::aes192_ctr(),
+    "rijndael-cbc@lysator.liu.se" => CbcCtr::aes256_cbc(),
+    "3des-cbc" => CbcCtr::des_ede3_cbc(),
+);
 
 #[derive(new)]
 pub struct Gcm {
     name: String,
-    ctx: *mut ffi::CipherCtx,
-    cipher: *const ffi::Cipher,
-    iv_len: usize,
-    key_len: usize,
+    cipher: symm::Cipher,
     block_size: usize,
-    idle: bool,
+    key_len: usize,
+    iv_len: usize,
+
+    #[new(value = "16")]
+    tag_len: usize,
+    
+    #[new(value = "true")]
     increase_iv: bool,
+    #[new(default)]
+    iv: Option<Vec<u8>>,
+    #[new(default)]
+    key: Option<Vec<u8>>,
+    #[new(default)]
+    ctx: Option<Crypter>
 }
 
-unsafe impl Send for Gcm {}
-unsafe impl Sync for Gcm {}
-
-impl Drop for Gcm {
-    fn drop(&mut self) {
-        unsafe { ffi::EVP_CIPHER_CTX_free(self.ctx) }
+impl Gcm {
+    fn aes128_gcm_openssh() -> Self {
+        Self::new("aes128-gcm@openssh.com".to_string(), symm::Cipher::aes_128_gcm(), 16, 16, 12)
+    }
+    fn aes256_gcm_openssh() -> Self {
+        Self::new("aes256-gcm@openssh.com".to_string(), symm::Cipher::aes_256_gcm(), 16, 32, 12)
     }
 }
 
 impl Gcm {
-    fn get_ctx_mut(&mut self) -> Result<*mut ffi::CipherCtx> {
-        if self.ctx.is_null() {
-            return Err(Error::ub("uninitlize"));
-        }
-        Ok(self.ctx)
+    fn get_ctx(&mut self) -> Result<&mut Crypter> {
+        self.ctx.as_mut().ok_or(Error::ub("Uninitialized"))
     }
 
-    fn aes256_gcm_openssh() -> Self {
-        unsafe {
-            let name = "aes256-gcm@openssh.com".to_string();
-            // let ctx = ffi::EVP_CIPHER_CTX_new();
-            let ctx = std::ptr::null_mut();
+    fn reset(&mut self, mode: symm::Mode) -> Result<()> {
 
-            // ffi::cvt_p(ctx)?;
-
-            let cipher = ffi::EVP_aes_256_gcm();
-
-            let iv_len = 12;
-            let key_len = 32;
-            let block_size = 16;
-            let idle = true;
-            let increase_iv = true;
-
-            Self {
-                name,
-                ctx,
-                cipher,
-                iv_len,
-                key_len,
-                block_size,
-                idle,
-                increase_iv,
-            }
+        match (&self.key, &mut self.iv) {
+            /*
+                    With AES-GCM, the 12-octet IV is broken into two fields: a 4-octet
+                    fixed field and an 8-octet invocation counter field.  The invocation
+                    field is treated as a 64-bit integer and is incremented after each
+                    invocation of AES-GCM to process a binary packet.
+             */
+            (Some(key), Some(iv)) => {
+                assert_eq!(iv.len(), 12);
+                if self.increase_iv {
+                    for i in (4..12).rev() {
+                        iv[i] = iv[i].wrapping_add(1);
+                        if iv[i] != 0 {
+                            break;
+                        }
+                    }
+                }
+                let ctx = Crypter::new(self.cipher, mode, key, Some(iv))?;
+                self.ctx = Some(ctx);
+                Ok(())
+            },
+            _ => Err(Error::ub("uninitlize"))
         }
     }
+}
 
-    fn aes128_gcm_openssh() -> Self {
-        unsafe {
-            let name = "aes128-gcm@openssh.com".to_string();
-            // let ctx = ffi::EVP_CIPHER_CTX_new();
 
-            // ffi::cvt_p(ctx)?;
-            let ctx = std::ptr::null_mut();
-
-            let cipher = ffi::EVP_aes_128_gcm();
-
-            let iv_len = 12;
-            let key_len = 16;
-            let block_size = 16;
-            let idle = true;
-            let increase_iv = true;
-
-            Self {
-                name,
-                ctx,
-                cipher,
-                iv_len,
-                key_len,
-                block_size,
-                idle,
-                increase_iv,
-            }
-        }
+impl Encrypt for Gcm {
+    fn name(&self) -> &str {
+        &self.name
     }
-    fn increase(&mut self) -> Result<()> {
-        unsafe {
-            let mut last = 0u8;
-            let res = ffi::EVP_CIPHER_CTX_ctrl(
-                self.ctx,
-                ffi::EVP_CTRL_GCM_IV_GEN,
-                -1,
-                &mut last as *mut u8 as _,
-            );
-            ffi::cvt(res)?;
-        }
 
+    fn has_tag(&self) -> bool {
+        true
+    }
+
+    fn has_aad(&self) -> bool {
+        true
+    }
+
+    fn enable_increase_iv(&mut self, enable: bool) {
+        self.increase_iv = enable;
+    }
+
+    fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    fn iv_len(&self) -> usize {
+        self.iv_len
+    }
+
+    fn key_len(&self) -> usize {
+        self.key_len
+    }
+
+    fn initialize(&mut self, iv: &[u8], key: &[u8]) -> Result<()> {
+        let mut ctx = Crypter::new(self.cipher, symm::Mode::Encrypt, key, Some(iv))?;
+        ctx.pad(false);
+        self.ctx = Some(ctx);
+        self.iv = Some(iv.to_vec());
+        self.key = Some(key.to_vec());
         Ok(())
+    }
+
+    fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize> {
+        match buf {
+            Some(output) => {
+                let base = output.len();
+                output.resize(base + data.len() + self.block_size, 0);
+                let len = self.get_ctx()?.update(data, &mut output[base..])?;
+                output.truncate(base + len);
+                Ok(len)
+            },
+            None => {
+                self.get_ctx()?.aad_update(data)?;
+                Ok(0)
+            },
+        }
+    }
+
+    fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        let base = buf.len();
+        buf.resize(base + self.block_size, 0);
+        let len = self.get_ctx()?.finalize(&mut buf[base..])?;
+        buf.truncate(base + len);
+        Ok(len)
+    }
+
+    fn authentication_tag(&mut self) -> Result<Vec<u8>> {
+        let mut tag = vec![0; 16];
+        self.get_ctx()?.get_tag(&mut tag)?;
+        self.reset(symm::Mode::Encrypt)?;
+        Ok(tag)
+    }
+    
+    fn tag_len(&self) -> usize {
+        self.tag_len
     }
 }
 
 impl Decrypt for Gcm {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
     fn has_tag(&self) -> bool {
         true
     }
@@ -191,6 +197,10 @@ impl Decrypt for Gcm {
         self.block_size
     }
 
+    fn enable_increase_iv(&mut self, enable: bool) {
+        self.increase_iv = enable;
+    }
+
     fn iv_len(&self) -> usize {
         self.iv_len
     }
@@ -200,248 +210,50 @@ impl Decrypt for Gcm {
     }
 
     fn initialize(&mut self, iv: &[u8], key: &[u8]) -> Result<()> {
-        unsafe {
-            let ctx = ffi::EVP_CIPHER_CTX_new();
-            ffi::cvt_p(ctx)?;
-
-            let res = ffi::EVP_DecryptInit(ctx, self.cipher, key.as_ptr(), iv.as_ptr());
-
-            ffi::cvt(res)?;
-
-            let res = ffi::EVP_CIPHER_CTX_ctrl(
-                ctx,
-                ffi::EVP_CTRL_AEAD_SET_IV_FIXED,
-                -1,
-                iv.as_ptr() as _,
-            );
-            ffi::cvt(res)?;
-
-            self.ctx = ctx;
-            // let mut last = 0u8;
-            // let res = ffi::EVP_CIPHER_CTX_ctrl(
-            //     self.ctx,
-            //     ffi::EVP_CTRL_GCM_IV_GEN,
-            //     1,
-            //     &mut last as *mut u8 as _,
-            // );
-            // ffi::cvt(res)?;
-        }
+        let mut ctx = Crypter::new(self.cipher, symm::Mode::Decrypt, key, Some(iv))?;
+        ctx.pad(false);
+        self.ctx = Some(ctx);
+        self.key = Some(key.to_vec());
+        self.iv = Some(iv.to_vec());
         Ok(())
     }
 
     fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize> {
-        if self.increase_iv && self.idle {
-            self.idle = false;
-            self.increase()?;
-        }
-
-        let mut outlen = 0;
         match buf {
-            Some(buf) => {
-                let base = buf.len();
-                buf.resize(base + data.len() + self.block_size, 0);
-                let res = unsafe {
-                    ffi::EVP_CipherUpdate(
-                        self.get_ctx_mut()?,
-                        buf[base..].as_mut_ptr(),
-                        &mut outlen as *mut _,
-                        data.as_ptr(),
-                        data.len() as _,
-                    )
-                };
-                ffi::cvt(res)?;
-                buf.truncate(base + outlen as usize);
-            }
+            Some(output) => {
+                let base = output.len();
+                output.resize(base + data.len() + self.block_size, 0);
+                let len = self.get_ctx()?.update(data, &mut output[base..])?;
+                output.truncate(base + len);
+                Ok(len)
+            },
             None => {
-                let res = unsafe {
-                    ffi::EVP_CipherUpdate(
-                        self.get_ctx_mut()?,
-                        std::ptr::null_mut(),
-                        &mut outlen as *mut _,
-                        data.as_ptr(),
-                        data.len() as _,
-                    )
-                };
-
-                ffi::cvt(res)?;
-            }
+                self.get_ctx()?.aad_update(data)?;
+                Ok(0)
+            },
         }
-
-        Ok(outlen as usize)
     }
 
     fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
-        unsafe {
-            self.idle = true;
-            let base = buf.len();
-            buf.resize(base + self.block_size, 0);
-
-            let mut outlen: c_int = 0;
-            let res = ffi::EVP_CipherFinal(
-                self.get_ctx_mut()?,
-                buf[base..].as_mut_ptr(),
-                &mut outlen as *mut _,
-            );
-
-            ffi::cvt(res)?;
-            buf.truncate(base + outlen as usize);
-            Ok(outlen as usize)
-        }
+        let base = buf.len();
+        buf.resize(base + self.block_size, 0);
+        let len = self.get_ctx()?.finalize(&mut buf[base..])?;
+        buf.truncate(base + len);
+        self.reset(symm::Mode::Decrypt)?;
+        Ok(len)
     }
 
     fn set_authentication_tag(&mut self, data: &[u8]) -> Result<()> {
-        unsafe {
-            let res = ffi::EVP_CIPHER_CTX_ctrl(
-                self.get_ctx_mut()?,
-                ffi::EVP_CTRL_GCM_SET_TAG,
-                data.len() as _,
-                data.as_ptr() as *mut _,
-            );
-            ffi::cvt(res)?;
-        }
+        self.get_ctx()?.set_tag(data)?;
         Ok(())
     }
-
-    fn enable_increase_iv(&mut self, enable: bool) {
-        self.increase_iv = enable;
-    }
-
-    fn name(&self) -> &str {
-        &self.name
+    
+    fn tag_len(&self) -> usize {
+        self.tag_len
     }
 }
 
-impl Encrypt for Gcm {
-    fn has_tag(&self) -> bool {
-        true
-    }
 
-    fn has_aad(&self) -> bool {
-        true
-    }
-
-    fn block_size(&self) -> usize {
-        self.block_size
-    }
-
-    fn iv_len(&self) -> usize {
-        self.iv_len
-    }
-
-    fn key_len(&self) -> usize {
-        self.key_len
-    }
-
-    fn initialize(&mut self, iv: &[u8], key: &[u8]) -> Result<()> {
-        unsafe {
-            let ctx = ffi::EVP_CIPHER_CTX_new();
-            ffi::cvt_p(ctx)?;
-
-            let res = ffi::EVP_EncryptInit(ctx, self.cipher, key.as_ptr(), iv.as_ptr());
-
-            ffi::cvt(res)?;
-
-            let res = ffi::EVP_CIPHER_CTX_ctrl(
-                ctx,
-                ffi::EVP_CTRL_AEAD_SET_IV_FIXED,
-                -1,
-                iv.as_ptr() as _,
-            );
-            ffi::cvt(res)?;
-            self.ctx = ctx;
-            // Encrypt::reset(self)?;
-        }
-        Ok(())
-    }
-
-    fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize> {
-        if self.increase_iv && self.idle {
-            self.idle = false;
-            self.increase()?;
-        }
-
-        let mut outlen = 0;
-        match buf {
-            Some(buf) => {
-                let base = buf.len();
-                buf.resize(base + data.len() + self.block_size, 0);
-                let res = unsafe {
-                    ffi::EVP_CipherUpdate(
-                        self.get_ctx_mut()?,
-                        buf[base..].as_mut_ptr(),
-                        &mut outlen as *mut _,
-                        data.as_ptr(),
-                        data.len() as _,
-                    )
-                };
-                ffi::cvt(res)?;
-                buf.truncate(base + outlen as usize);
-            }
-            None => {
-                let res = unsafe {
-                    ffi::EVP_CipherUpdate(
-                        self.get_ctx_mut()?,
-                        std::ptr::null_mut(),
-                        &mut outlen as *mut _,
-                        data.as_ptr(),
-                        data.len() as _,
-                    )
-                };
-
-                ffi::cvt(res)?;
-            }
-        }
-
-        Ok(outlen as usize)
-    }
-
-    fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
-        unsafe {
-            self.idle = true;
-            let base = buf.len();
-            buf.resize(base + self.block_size, 0);
-
-            let mut outlen: i32 = 0;
-            let res = ffi::EVP_CipherFinal(
-                self.get_ctx_mut()?,
-                buf[base..].as_mut_ptr(),
-                &mut outlen as *mut _,
-            );
-
-            ffi::cvt(res)?;
-
-            buf.truncate(base + outlen as usize);
-            Ok(outlen as usize)
-        }
-    }
-
-    fn authentication_tag(&mut self) -> Result<Vec<u8>> {
-        unsafe {
-            let ctx = self.get_ctx_mut()?;
-            let tag_len = ffi::EVP_CIPHER_CTX_get_tag_length(ctx);
-
-            let mut tag = vec![0; tag_len as usize];
-
-            let res = ffi::EVP_CIPHER_CTX_ctrl(
-                ctx,
-                ffi::EVP_CTRL_GCM_GET_TAG,
-                tag_len,
-                tag.as_mut_ptr() as _,
-            );
-            ffi::cvt(res)?;
-
-            Ok(tag)
-        }
-    }
-
-    fn enable_increase_iv(&mut self, enable: bool) {
-        self.increase_iv = enable;
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
 
 pub trait Encrypt {
     fn name(&self) -> &str;
@@ -451,6 +263,7 @@ pub trait Encrypt {
     fn block_size(&self) -> usize;
     fn iv_len(&self) -> usize;
     fn key_len(&self) -> usize;
+    fn tag_len(&self) -> usize;
 
     fn initialize(&mut self, iv: &[u8], key: &[u8]) -> Result<()>;
     fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize>;
@@ -470,6 +283,7 @@ pub trait Decrypt {
     fn enable_increase_iv(&mut self, enable: bool);
     fn iv_len(&self) -> usize;
     fn key_len(&self) -> usize;
+    fn tag_len(&self) -> usize;
 
     fn initialize(&mut self, iv: &[u8], key: &[u8]) -> Result<()>;
     fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize>;
@@ -535,6 +349,10 @@ impl Encrypt for CbcCtr {
 
     fn name(&self) -> &str {
         &self.name
+    }
+    
+    fn tag_len(&self) -> usize {
+        0
     }
 }
 
@@ -692,6 +510,10 @@ impl Decrypt for CbcCtr {
     fn name(&self) -> &str {
         &self.name
     }
+    
+    fn tag_len(&self) -> usize {
+        0
+    }
 }
 
 #[derive(Clone, Copy, new)]
@@ -702,36 +524,4 @@ pub struct CipherArgs {
     iv_len: usize,
 }
 
-algo_list!(
-    encrypt_all,
-    new_encrypt_all,
-    new_encrypt_by_name,
-    dyn Encrypt + Send,
-    "aes256-gcm@openssh.com" => Gcm::aes256_gcm_openssh(),
-    "aes128-gcm@openssh.com" => Gcm::aes128_gcm_openssh(),
-    "aes256-ctr" => CbcCtr::aes256_ctr(),
-    "aes128-cbc" => CbcCtr::aes128_cbc(),
-    "aes192-cbc" => CbcCtr::aes192_cbc(),
-    "aes256-cbc" => CbcCtr::aes256_cbc(),
-    "aes128-ctr" => CbcCtr::aes128_ctr(),
-    "aes192-ctr" => CbcCtr::aes192_ctr(),
-    "rijndael-cbc@lysator.liu.se" => CbcCtr::aes256_cbc(),
-    "3des-cbc" => CbcCtr::des_ede3_cbc(),
-);
 
-algo_list!(
-    decrypt_all,
-    new_decrypt_all,
-    new_decrypt_by_name,
-    dyn Decrypt + Send,
-    "aes256-gcm@openssh.com" => Gcm::aes256_gcm_openssh(),
-    "aes128-gcm@openssh.com" => Gcm::aes128_gcm_openssh(),
-    "aes256-ctr" => CbcCtr::aes256_ctr(),
-    "aes128-cbc" => CbcCtr::aes128_cbc(),
-    "aes192-cbc" => CbcCtr::aes192_cbc(),
-    "aes256-cbc" => CbcCtr::aes256_cbc(),
-    "aes128-ctr" => CbcCtr::aes128_ctr(),
-    "aes192-ctr" => CbcCtr::aes192_ctr(),
-    "rijndael-cbc@lysator.liu.se" => CbcCtr::aes256_cbc(),
-    "3des-cbc" => CbcCtr::des_ede3_cbc(),
-);

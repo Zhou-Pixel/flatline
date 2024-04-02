@@ -459,7 +459,7 @@ where
             self.decrypt.update(&left, Some(&mut plain_text))?;
 
             let mac = if self.decrypt.has_tag() {
-                let tag = self.stream.read_exact(16).await?;
+                let tag = self.stream.read_exact(self.decrypt.tag_len()).await?;
                 self.decrypt.set_authentication_tag(&tag)?;
                 None
             } else {

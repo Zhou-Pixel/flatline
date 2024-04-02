@@ -1435,6 +1435,12 @@ where
             loop {
                 let msg = self.recv_msg().await?;
                 match msg {
+                    ServerMessage::ChannelClose(recipient) if recipient == client_id => {
+                        break Err(Error::ChannelClosed);
+                    },
+                    ServerMessage::ChannelEof(recipient) if recipient == client_id => {
+                        break Err(Error::ChannelEof);
+                    }
                     ServerMessage::ChannelStdoutData { recipient, data }
                         if recipient == client_id =>
                     {

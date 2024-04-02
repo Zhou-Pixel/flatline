@@ -20,7 +20,7 @@ use super::ssh::stream::{BufferStream, Stream};
 use super::cipher::Boxtory;
 
 pub struct Config {
-    pub banner: String,
+    pub(crate) banner: String, // 
     pub key_exchange: IndexMap<String, Boxtory<dyn KeyExChange + Send>>,
     pub hostkey: IndexMap<String, Boxtory<dyn Verify + Send>>,
     pub crypt_server_to_client: IndexMap<String, Boxtory<dyn Decrypt + Send>>,
@@ -57,6 +57,15 @@ impl Default for Config {
             key_strict: true,
             ext: false,
         }
+    }
+}
+
+impl Config {
+    pub fn disable_compress(&mut self) {
+        self.compress_client_to_server.clear();
+        self.compress_server_to_client.clear();
+        self.compress_client_to_server.insert("none".to_string(), compress::none_encode());
+        self.compress_server_to_client.insert("none".to_string(), compress::none_decode());
     }
 }
 
@@ -140,6 +149,42 @@ pub(crate) struct MethodExchange {
 }
 
 pub(crate) async fn method_exchange(stream: &mut dyn Stream, config: &Config) -> Result<MethodExchange> {
+
+    let invalid_arg = |str: &str| Err(Error::InvalidArgument(str.to_string()));
+    if config.compress_client_to_server.is_empty() {
+        return invalid_arg("compress client to server is empty, 'none' should be provided at least");
+    }
+
+    if config.compress_server_to_client.is_empty() {
+        return invalid_arg("compress_server_to_client is empty, 'none' should be provided at least");
+    }
+
+    if config.crypt_client_to_server.is_empty() {
+        return invalid_arg("crypt client to server is empty");
+    }
+    
+    if config.crypt_server_to_client.is_empty() {
+        return invalid_arg("crypt server to client is empty");
+    }
+
+    if config.mac_client_to_server.is_empty() {
+        return invalid_arg("mac client to server is empty");
+    }
+
+    if config.mac_server_to_client.is_empty() {
+        return invalid_arg("mac server to client is empty");
+    }
+
+    if config.hostkey.is_empty() {
+        return invalid_arg("hostkey is empty");
+    }
+
+    if config.key_exchange.is_empty() {
+
+        return invalid_arg("key exhange is empty");
+    }
+
+
 
     let client_methods = Methods::from_config(config);
 

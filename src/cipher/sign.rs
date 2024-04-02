@@ -1,7 +1,7 @@
 use derive_new::new;
 use indexmap::IndexMap;
 use openssl::{
-    bn::BigNum, dsa::{self, DsaSig}, hash::MessageDigest, md::{Md, MdRef}, md_ctx::MdCtx, pkey::{Id, PKey, Private, Public}, pkey_ctx::PkeyCtx, rsa::{self, Padding, RsaPrivateKeyBuilder}, sign::{Signer, Verifier}
+    bn::{BigNum, BigNumContext}, dsa::{self, DsaSig}, ec::{EcKey, EcPoint}, ecdsa::EcdsaSig, hash::MessageDigest, md::{Md, MdRef}, md_ctx::MdCtx, nid::Nid, pkey::{Id, PKey, Private, Public}, pkey_ctx::PkeyCtx, rsa::{self, Padding, RsaPrivateKeyBuilder}, sign::{Signer, Verifier}
 };
 
 use crate::{
@@ -10,6 +10,34 @@ use crate::{
 };
 
 use super::*;
+
+algo_list!(
+    signature_all,
+    new_signature_all,
+    new_signature_by_name,
+    dyn Signature + Send,
+    "ssh-ed25519" => Ed25519::new(None),
+    "rsa-sha2-256" => Rsa::rsa_sha2_256(),
+    "rsa-sha2-512" => Rsa::rsa_sha2_512(),
+    "ssh-rsa" => Rsa::ssh_rsa(),
+    "ssh-dss" => Dsa::ssh_dss(),
+);
+
+algo_list!(
+    verify_all,
+    new_verify_all,
+    new_verify_by_name,
+    dyn Verify + Send,
+    // "ssh-ed25519" => Ed25519::new(None),
+    // "rsa-sha2-256" => Rsa::rsa_sha2_256(),
+    // "rsa-sha2-512" => Rsa::rsa_sha2_512(),
+    // "ssh-rsa" => Rsa::ssh_rsa(),
+    // "ssh-dss" => Dsa::ssh_dss(),
+    "ecdsa-sha2-nistp521" => Ecdsa::ecdsa_sha2_nistp521(),
+    "ecdsa-sha2-nistp256" => Ecdsa::ecdsa_sha2_nistp256(),
+    "ecdsa-sha2-nistp384" => Ecdsa::ecdsa_sha2_nistp384(),
+);
+
 
 pub trait Signature {
     fn initialize(&mut self, key: &[u8]) -> Result<()>;
@@ -34,13 +62,13 @@ impl Signature for Ed25519 {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
         let mut key = Buffer::from_vec(key.to_vec());
 
-        let invalid_format_key = || Error::invalid_format("invalid key format");
+        // let invalid_format_key = || Error::invalid_format("invalid key format");
 
-        if key.take_one().ok_or_else(invalid_format_key)?.1 != b"ssh-ed25519" {
-            return Err(invalid_format_key());
+        if key.take_one().ok_or_else(invalid_key_format)?.1 != b"ssh-ed25519" {
+            return Err(invalid_key_format());
         }
 
-        let key = key.take_one().ok_or_else(invalid_format_key)?.1;
+        let key = key.take_one().ok_or_else(invalid_key_format)?.1;
 
         let pkey = PKey::private_key_from_raw_bytes(&key, Id::ED25519)?;
 
@@ -63,33 +91,9 @@ impl Signature for Ed25519 {
     }
 }
 
-algo_list!(
-    signature_all,
-    new_signature_all,
-    new_signature_by_name,
-    dyn Signature + Send,
-    "ssh-ed25519" => Ed25519::new(None),
-    "rsa-sha2-256" => Rsa::rsa_sha2_256(),
-    "rsa-sha2-512" => Rsa::rsa_sha2_512(),
-    "ssh-rsa" => Rsa::ssh_rsa(),
-    "ssh-dss" => Dsa::ssh_dss(),
-);
-
-algo_list!(
-    verify_all,
-    new_verify_all,
-    new_verify_by_name,
-    dyn Verify + Send,
-    "ssh-ed25519" => Ed25519::new(None),
-    "rsa-sha2-256" => Rsa::rsa_sha2_256(),
-    "rsa-sha2-512" => Rsa::rsa_sha2_512(),
-    "ssh-rsa" => Rsa::ssh_rsa(),
-    "ssh-dss" => Dsa::ssh_dss(),
-);
-
 pub trait Verify {
     fn initialize(&mut self, key: &[u8]) -> Result<()>;
-    fn verify(&mut self, sigature: &[u8], data: &[u8]) -> Result<bool>;
+    fn verify(&mut self, signature: &[u8], data: &[u8]) -> Result<bool>;
 }
 
 impl Verify for Ed25519 {
@@ -328,7 +332,7 @@ impl<T> Dsa<T> {
 impl Verify for Dsa<Public> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
         let mut key = Buffer::from_vec(key.to_vec());
-        let invalid_key_format = || Error::invalid_format("invalid key format");
+        // let invalid_key_format = || Error::invalid_format("invalid key format");
 
         let mut take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
 
@@ -384,7 +388,7 @@ impl Verify for Dsa<Public> {
         // Serialize DSA signature to DER
         let signature = signature.to_der()?;
 
-        let key = self.key.as_ref().ok_or(Error::ub("uninitlize"))?;
+        let key = self.key.as_ref().ok_or(Error::ub("Uninitializedd"))?;
         let mut verifier = Verifier::new(MessageDigest::sha1(), key).unwrap();
         verifier.update(data)?;
 
@@ -394,10 +398,11 @@ impl Verify for Dsa<Public> {
 }
 
 
+
 impl Signature for Dsa<Private> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
         let mut key = Buffer::from_vec(key.to_vec());
-                let invalid_key_format = || Error::invalid_format("invalid key format");
+                // let invalid_key_format = || Error::invalid_format("invalid key format");
 
         let mut take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
 
@@ -434,5 +439,120 @@ impl Signature for Dsa<Private> {
         signer.update(data)?;
 
         Ok(signer.sign_to_vec()?)
+    }
+}
+
+
+fn invalid_key_format() -> Error {
+    Error::invalid_format("invalid key format")
+}
+
+#[derive(new)]
+struct Ecdsa<T> {
+    name: String,
+    nid: Nid,
+    hash: &'static MdRef,
+    #[new(default)]
+    key: Option<PKey<T>>
+}
+
+impl<T> Ecdsa<T> {
+    fn calculate_hash(&self, data: &[u8]) -> Result<Vec<u8>> {
+
+        let mut ctx = MdCtx::new()?;
+        ctx.digest_init(self.hash)?;
+
+
+        ctx.digest_update(data)?;
+
+        let mut out = vec![0; ctx.size()];
+
+        ctx.digest_final(&mut out)?;
+
+        Ok(out)
+    }
+
+    fn get_key(&self) -> Result<&PKey<T>> {
+        self.key.as_ref().ok_or(Error::ub("Uninitialized"))
+    }
+}
+
+impl<T> Ecdsa<T> {
+    fn ecdsa_sha2_nistp256() -> Self {
+        Self::new("ecdsa-sha2-nistp256".to_string(), Nid::X9_62_PRIME256V1, Md::sha256())
+    }
+
+    fn ecdsa_sha2_nistp384() -> Self {
+        Self::new("ecdsa-sha2-nistp384".to_string(), Nid::SECP384R1, Md::sha384())
+    }
+
+    fn ecdsa_sha2_nistp521() -> Self {
+        Self::new("ecdsa-sha2-nistp521".to_string(), Nid::SECP521R1, Md::sha512())
+    }
+}
+
+impl Verify for Ecdsa<Public> {
+    fn initialize(&mut self, key: &[u8]) -> Result<()> {
+        let mut key = Buffer::from_vec(key.to_vec());
+
+
+        let keytype = key.take_one().ok_or_else(invalid_key_format)?.1;
+        if self.name.as_bytes() != keytype {
+            return Err(invalid_key_format());
+        }
+
+        let id = key.take_one().ok_or_else(invalid_key_format)?.1;
+
+        if !self.name.ends_with(&String::from_utf8(id)?) {
+            return Err(invalid_key_format());
+        }
+
+        let public_key = key.take_one().ok_or_else(invalid_key_format)?.1;
+
+        let eckey = EcKey::from_curve_name(self.nid)?;
+        let group = eckey.group();
+        
+        let mut bnctx = BigNumContext::new()?;
+        let point = EcPoint::from_bytes(group, &public_key, &mut bnctx)?;
+        let point = EcKey::from_public_key(group, &point)?;
+
+
+
+        point.check_key()?;
+
+        let pkey = PKey::from_ec_key(point)?;
+
+        self.key = Some(pkey);
+        Ok(())
+    }
+
+    fn verify(&mut self, signature: &[u8], data: &[u8]) -> Result<bool> {
+        let mut signature = Buffer::from_vec(signature.to_vec());
+        if signature.take_one().ok_or_else(invalid_key_format)?.1 != self.name.as_bytes() {
+            return Err(invalid_key_format());
+        }
+
+        let signature = signature.take_one().ok_or_else(invalid_key_format)?.1;
+
+        let mut signature = Buffer::from_vec(signature);
+        let r = signature.take_one().ok_or_else(invalid_key_format)?.1;
+        let s = signature.take_one().ok_or_else(invalid_key_format)?.1;
+
+        let ecsig = EcdsaSig::from_private_components(BigNum::from_slice(&r)?, BigNum::from_slice(&s)?)?;
+
+        let signature = ecsig.to_der()?;
+
+        let hash = self.calculate_hash(data)?;
+
+
+        let key = self.get_key()?;
+
+
+        let mut ctx = PkeyCtx::new(key)?;
+
+        ctx.verify_init()?;
+        Ok(ctx.verify(&hash, &signature)?)
+
+
     }
 }

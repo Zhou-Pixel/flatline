@@ -1,8 +1,8 @@
-// macro_rules! create_closure {
-//     ($ex:expr) => {
-//         Box::new(|| $ex as _)
-//     };
-// }
+macro_rules! create_boxtory {
+    ($ex:expr) => {
+        Box::new(|| Box::new($ex) as _)
+    };
+}
 
 macro_rules! algo_list {
     (

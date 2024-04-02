@@ -8,84 +8,6 @@ use openssl::{
 };
 use super::*;
 
-pub trait Mac {
-    fn encrypt_then_mac(&self) -> bool;
-    fn key_len(&self) -> usize;
-    fn mac_len(&self) -> usize;
-    fn initialize(&mut self, key: &[u8]) -> Result<()>;
-    fn update(&mut self, data: &[u8]) -> Result<()>;
-    fn finalize(&mut self) -> Result<Vec<u8>>;
-}
-
-#[derive(new)]
-pub struct HMac {
-    mac_len: usize,
-    key_len: usize,
-    #[new(default)]
-    ctx: Option<MdCtx>,
-    #[new(default)]
-    key: Option<PKey<Private>>,
-    encrypt_then_mac: bool,
-    digest: &'static MdRef,
-}
-
-impl HMac {
-    fn get_ctx_mut(&mut self) -> Result<&mut MdCtx> {
-        match self.ctx {
-            Some(ref mut ctx) => Ok(ctx),
-            None => Err(crate::error::Error::ub("uninitilze")),
-        }
-    }
-}
-
-impl Mac for HMac {
-    fn encrypt_then_mac(&self) -> bool {
-        self.encrypt_then_mac
-    }
-    fn key_len(&self) -> usize {
-        self.key_len
-    }
-
-    fn mac_len(&self) -> usize {
-        self.mac_len
-    }
-
-    fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let pkey = PKey::hmac(key)?;
-
-        let mut ctx = MdCtx::new()?;
-        ctx.digest_sign_init(Some(self.digest), &pkey)?;
-        
-        self.ctx = Some(ctx);
-        self.key = Some(pkey);
-        Ok(())
-    }
-
-    fn update(&mut self, data: &[u8]) -> Result<()> {
-        self.get_ctx_mut()?.digest_sign_update(data).map_err(|e| e.into())
-    }
-
-    fn finalize(&mut self) -> Result<Vec<u8>> {
-        let ctx = self.ctx.as_mut().ok_or(Error::ub("uninitilize"))?;
-
-        let size = ctx.digest_sign_final(None)?;
-        let mut buf = vec![0; size];
-        ctx.digest_sign_final(Some(&mut buf))?;
-        buf.truncate(self.mac_len);
-
-        // self.ctx = MdCtx::new()?;
-
-        ctx.reset()?;
-        if let Some(ref pkey) = self.key {
-            ctx.digest_sign_init(Some(self.digest), pkey)?;
-        }
-        Ok(buf)
-    }
-
-
-}
-
-
 
 algo_list!(
     all,
@@ -187,5 +109,85 @@ algo_list!(
         Md::ripemd160(),
     ),   
 );
+
+
+
+
+pub trait Mac {
+    fn encrypt_then_mac(&self) -> bool;
+    fn key_len(&self) -> usize;
+    fn mac_len(&self) -> usize;
+    fn initialize(&mut self, key: &[u8]) -> Result<()>;
+    fn update(&mut self, data: &[u8]) -> Result<()>;
+    fn finalize(&mut self) -> Result<Vec<u8>>;
+}
+
+#[derive(new)]
+pub struct HMac {
+    mac_len: usize,
+    key_len: usize,
+    #[new(default)]
+    ctx: Option<MdCtx>,
+    #[new(default)]
+    key: Option<PKey<Private>>,
+    encrypt_then_mac: bool,
+    digest: &'static MdRef,
+}
+
+impl HMac {
+    fn get_ctx_mut(&mut self) -> Result<&mut MdCtx> {
+        match self.ctx {
+            Some(ref mut ctx) => Ok(ctx),
+            None => Err(crate::error::Error::ub("Uninitialized")),
+        }
+    }
+}
+
+impl Mac for HMac {
+    fn encrypt_then_mac(&self) -> bool {
+        self.encrypt_then_mac
+    }
+    fn key_len(&self) -> usize {
+        self.key_len
+    }
+
+    fn mac_len(&self) -> usize {
+        self.mac_len
+    }
+
+    fn initialize(&mut self, key: &[u8]) -> Result<()> {
+        let pkey = PKey::hmac(key)?;
+
+        let mut ctx = MdCtx::new()?;
+        ctx.digest_sign_init(Some(self.digest), &pkey)?;
+        
+        self.ctx = Some(ctx);
+        self.key = Some(pkey);
+        Ok(())
+    }
+
+    fn update(&mut self, data: &[u8]) -> Result<()> {
+        self.get_ctx_mut()?.digest_sign_update(data).map_err(|e| e.into())
+    }
+
+    fn finalize(&mut self) -> Result<Vec<u8>> {
+        let ctx = self.ctx.as_mut().ok_or(Error::ub("Uninitialized"))?;
+
+        let size = ctx.digest_sign_final(None)?;
+        let mut buf = vec![0; size];
+        ctx.digest_sign_final(Some(&mut buf))?;
+        buf.truncate(self.mac_len);
+
+        // self.ctx = MdCtx::new()?;
+
+        ctx.reset()?;
+        if let Some(ref pkey) = self.key {
+            ctx.digest_sign_init(Some(self.digest), pkey)?;
+        }
+        Ok(buf)
+    }
+
+
+}
 
 

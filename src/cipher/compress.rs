@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use std::mem;
 
 
+
 algo_list!(
     encode_all,
     new_encode_all,
@@ -25,6 +26,13 @@ algo_list!(
     "none" => Never::default(),
 );
 
+pub fn none_encode() -> Boxtory<dyn Encode + Send> {
+    create_boxtory!(Never::default())
+}
+
+pub fn none_decode() -> Boxtory<dyn Decode + Send> {
+    create_boxtory!(Never::default())
+}
 
 pub trait Encode {
     fn compress_in_auth(&self) -> bool;

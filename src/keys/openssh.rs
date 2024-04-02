@@ -160,7 +160,7 @@ impl super::KeyParser for OpenSSH {
 
                     if cipher.has_tag() {
                         let tag = decode
-                            .take_bytes(16)
+                            .take_bytes(cipher.tag_len())
                             .ok_or(Error::invalid_format("invalid binary format"))?;
 
                         cipher.set_authentication_tag(&tag)?;

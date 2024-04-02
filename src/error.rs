@@ -10,10 +10,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("openssl error")]
+    #[error("Openssl error")]
     OpensslError(#[from] ErrorStack),
 
-    #[error("std io error")]
+    #[error("Standard io error")]
     IOError(#[from] io::Error),
 
     // #[error("custom io timeout")]
@@ -35,10 +35,10 @@ pub enum Error {
     #[error("Algorithm negotiation failed")]
     NegotiationFailed,
 
-    #[error("banner exchange failed: {0}")]
+    #[error("Banner exchange failed: {0}")]
     BannerExchange(String),
 
-    #[error("disconnect")]
+    #[error("Server connection lost")]
     Disconnect,
 
     #[error("Server Message mac verification failed")]
@@ -53,16 +53,16 @@ pub enum Error {
     // #[error("internal error: failed to find channel")]
     // ChannelNotFound,
 
-    #[error("channel closed")]
+    #[error("Channel was closed")]
     ChannelClosed,
 
-    #[error("channel end of file")]
+    #[error("Channel end of file")]
     ChannelEof,
 
-    #[error("host key verify failed")]
+    #[error("Failed to verify hostkey")]
     HostKeyVerifyFailed,
 
-    #[error("failed to startup sftp")]
+    #[error("Failed to request subsystem from server")]
     SubsystemFailed,
 
     #[error("Resource is temporarily unavailable")]
@@ -77,25 +77,28 @@ pub enum Error {
     // #[error("error code: {0:?}, msg: {1}")]
     // SFtpError(Status, String),
 
-    #[error("{0}")]
+    #[error("Invalid Argument: {0}")]
+    InvalidArgument(String),
+
+    #[error("SFtp: {0}")]
     NoSuchFile(String),
 
-    #[error("{0}")]
+    #[error("SFtp: {0}")]
     PermissionDenied(String),
 
-    #[error("{0}")]
+    #[error("SFtp: {0}")]
     SFtpFailure(String),
 
-    #[error("{0}")]
+    #[error("SFtp: {0}")]
     BadMessage(String),
 
-    #[error("{0}")]
+    #[error("SFtp: {0}")]
     NoConnection(String),
 
-    #[error("{0}")]
+    #[error("SFtp: {0}")]
     ConnectionLost(String),
 
-    #[error("{0}")]
+    #[error("SFtp: {0}")]
     OpUnsupported(String),
 }
 

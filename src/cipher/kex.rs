@@ -21,6 +21,26 @@ use crate::ssh::{self, buffer::Buffer};
 
 use ssh::common::code::*;
 
+algo_list! (
+    all,
+    new_all,
+    new_kex_by_name,
+    dyn KeyExChange + Send,
+    "diffie-hellman-group14-sha256" => DiffieHellmanKeyExchange::dh_group14_sha256(),
+    "diffie-hellman-group16-sha512" => DiffieHellmanKeyExchange::dh_group16_sha512(),
+    "diffie-hellman-group16-sha256" => DiffieHellmanKeyExchange::dh_group16_sha256(),
+    "diffie-hellman-group14-sha1" => DiffieHellmanKeyExchange::dh_group14_sha1(),
+    "diffie-hellman-group18-sha512" => DiffieHellmanKeyExchange::dh_group18_sha512(),
+    "diffie-hellman-group-exchange-sha256" => DiffieHellmanKeyExchangeX::sha256(),
+    "diffie-hellman-group-exchange-sha1" => DiffieHellmanKeyExchangeX::sha1(),
+    "ecdh-sha2-nistp256" => ECDHKexExchange::ecdh_sha2_nistp256(),
+    "ecdh-sha2-nistp384" => ECDHKexExchange::ecdh_sha2_nistp384(),
+    "ecdh-sha2-nistp521" => ECDHKexExchange::ecdh_sha2_nistp521(),
+    "diffie-hellman-group15-sha512" => DiffieHellmanKeyExchange::dh_group15_sha512(),
+    "diffie-hellman-group17-sha512" => DiffieHellmanKeyExchange::dh_group17_sha512(),
+    "diffie-hellman-group1-sha1" => DiffieHellmanKeyExchange::dh_group1_sha1(),
+);
+
 #[async_trait::async_trait]
 pub trait KeyExChange: Send {
     async fn kex(&self, config: Dependency, stream: &mut dyn Stream) -> Result<Summary>;
@@ -977,23 +997,5 @@ impl KeyExChange for ECDHKexExchange {
     }
 }
 
-algo_list! (
-    all,
-    new_all,
-    new_kex_by_name,
-    dyn KeyExChange + Send,
-    "diffie-hellman-group14-sha256" => DiffieHellmanKeyExchange::dh_group14_sha256(),
-    "diffie-hellman-group16-sha512" => DiffieHellmanKeyExchange::dh_group16_sha512(),
-    "diffie-hellman-group16-sha256" => DiffieHellmanKeyExchange::dh_group16_sha256(),
-    "diffie-hellman-group14-sha1" => DiffieHellmanKeyExchange::dh_group14_sha1(),
-    "diffie-hellman-group18-sha512" => DiffieHellmanKeyExchange::dh_group18_sha512(),
-    "diffie-hellman-group-exchange-sha256" => DiffieHellmanKeyExchangeX::sha256(),
-    "diffie-hellman-group-exchange-sha1" => DiffieHellmanKeyExchangeX::sha1(),
-    "ecdh-sha2-nistp256" => ECDHKexExchange::ecdh_sha2_nistp256(),
-    "ecdh-sha2-nistp384" => ECDHKexExchange::ecdh_sha2_nistp384(),
-    "ecdh-sha2-nistp521" => ECDHKexExchange::ecdh_sha2_nistp521(),
-    "diffie-hellman-group15-sha512" => DiffieHellmanKeyExchange::dh_group15_sha512(),
-    "diffie-hellman-group17-sha512" => DiffieHellmanKeyExchange::dh_group17_sha512(),
-    "diffie-hellman-group1-sha1" => DiffieHellmanKeyExchange::dh_group1_sha1(),
-);
+
 
