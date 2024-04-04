@@ -7,6 +7,9 @@ use crate::Boxtory;
 use openssl::base64::decode_block;
 use std::collections::HashMap;
 
+use super::PrivateKey;
+use super::PublicKey;
+
 pub struct OpenSSH {
     cipher: HashMap<String, Boxtory<dyn Decrypt + Send>>,
 }
@@ -23,7 +26,7 @@ impl Default for OpenSSH {
 }
 
 impl super::KeyParser for OpenSSH {
-    fn parse_publickey(&self, binary: &[u8]) -> Result<(String, Vec<u8>)> {
+    fn parse_publickey(&self, binary: &[u8]) -> Result<PublicKey> {
         let content = String::from_utf8(binary.to_vec())?;
 
         let parts: Vec<_> = content.trim().split(' ').collect();
@@ -51,14 +54,14 @@ impl super::KeyParser for OpenSSH {
         //     return Err(Error::invalid_format("unsupport key type"));
         // };
 
-        Ok((parts[0].to_string(), decode_block(parts[1])?))
+        Ok(PublicKey::new(parts[0].to_string(), decode_block(parts[1])?))
     }
 
     fn parse_privatekey(
         &self,
         binary: &[u8],
         passphrase: Option<&[u8]>,
-    ) -> Result<(String, Vec<u8>, Vec<u8>)> {
+    ) -> Result<PrivateKey> {
         let invalid_key_format = || Error::invalid_format("invalid public key format");
         let content =
             std::str::from_utf8(binary).map_err(|_| Error::invalid_format("not uft-8 string"))?;
@@ -114,7 +117,7 @@ impl super::KeyParser for OpenSSH {
             .take_one()
             .ok_or(Error::invalid_format("invalid binary format"))?;
 
-        let (_, mut encrypted) = decode
+        let (_, mut section) = decode
             .take_one()
             .ok_or(Error::invalid_format("invalid binary format"))?;
 
@@ -150,13 +153,13 @@ impl super::KeyParser for OpenSSH {
                         &key_and_iv[..cipher.key_len()],
                     )?;
 
-                    if encrypted.len() % cipher.block_size() != 0 {
+                    if section.len() % cipher.block_size() != 0 {
                         return Err(Error::invalid_format("invalid binary format"));
                     }
 
                     let mut plain_text = vec![];
 
-                    cipher.update(&encrypted, Some(&mut plain_text))?;
+                    cipher.update(&section, Some(&mut plain_text))?;
 
                     if cipher.has_tag() {
                         let tag = decode
@@ -168,7 +171,7 @@ impl super::KeyParser for OpenSSH {
 
                     cipher.finalize(&mut plain_text)?;
 
-                    encrypted = plain_text;
+                    section = plain_text;
 
                     // bcrypt_pbkdf::bcrypt_pbkdf_with_memory(passphrase, &salt, rounds, &mut [], &mut []);
                 }
@@ -180,26 +183,27 @@ impl super::KeyParser for OpenSSH {
             }
         }
 
-        if keytype == b"ssh-ed25519" {
+        let mut section = Buffer::from_vec(section);
+
+        let checkint1 = section
+            .take_u32()
+            .ok_or(Error::invalid_format("invalid binary format"))?;
+
+        let checkint2 = section
+            .take_u32()
+            .ok_or(Error::invalid_format("invalid binary format"))?;
+
+        if checkint1 != checkint2 {
+            return Err(Error::invalid_format("checkint1 != checkint2"));
+        }
+        let (private, public) = if keytype == b"ssh-ed25519" {
             let (_, pubkey1) = pbuf
                 .take_one()
                 .ok_or(Error::invalid_format("invalid binary format"))?;
 
-            let mut encrypted = Buffer::from_vec(encrypted);
 
-            let checkint1 = encrypted
-                .take_u32()
-                .ok_or(Error::invalid_format("invalid binary format"))?;
 
-            let checkint2 = encrypted
-                .take_u32()
-                .ok_or(Error::invalid_format("invalid binary format"))?;
-
-            if checkint1 != checkint2 {
-                return Err(Error::invalid_format("checkint1 != checkint2"));
-            }
-
-            let (_, keytype2) = encrypted
+            let (_, keytype2) = section
                 .take_one()
                 .ok_or(Error::invalid_format("invalid binary format"))?;
 
@@ -207,7 +211,7 @@ impl super::KeyParser for OpenSSH {
                 return Err(Error::invalid_format("invalid key format"));
             }
 
-            let (_, pubkey2) = encrypted
+            let (_, pubkey2) = section
                 .take_one()
                 .ok_or(Error::invalid_format("invalid binary format"))?;
 
@@ -215,7 +219,7 @@ impl super::KeyParser for OpenSSH {
                 return Err(Error::invalid_format("pubkey1 != pubkey2"));
             }
 
-            let (secret_len, secret) = encrypted
+            let (secret_len, secret) = section
                 .take_one()
                 .ok_or(Error::invalid_format("invalid binary format"))?;
 
@@ -229,36 +233,22 @@ impl super::KeyParser for OpenSSH {
 
             let prikey = secret[..32].to_vec();
 
-            let (_, _comment) = encrypted
+            let (_, _comment) = section
                 .take_one()
                 .ok_or(Error::invalid_format("invalid binary format"))?;
 
             let mut private_key = Buffer::new();
-            private_key.put_one(keytype);
+            private_key.put_one(&keytype);
             private_key.put_one(prikey);
 
-            Ok((
-                "ssh-ed25519".to_string(),
+            (
                 private_key.into_vec(),
                 public_key,
-            ))
+            )
         } else if keytype == b"ssh-rsa" {
 
-            let mut encrypted = Buffer::from_vec(encrypted);
-            let checkint1 = encrypted
-                .take_u32()
-                .ok_or(Error::invalid_format("invalid binary format"))?;
-
-            let checkint2 = encrypted
-                .take_u32()
-                .ok_or(Error::invalid_format("invalid binary format"))?;
-
-            if checkint1 != checkint2 {
-                return Err(Error::invalid_format("checkint1 != checkint2"));
-            }
-
             let mut take_one =
-                || Result::Ok(encrypted.take_one().ok_or_else(invalid_key_format)?.1);
+                || Result::Ok(section.take_one().ok_or_else(invalid_key_format)?.1);
 
             if take_one()? != keytype {
                 return Err(invalid_key_format());
@@ -278,7 +268,7 @@ impl super::KeyParser for OpenSSH {
 
             let mut prikey = Buffer::new();
 
-            prikey.put_one(keytype);
+            prikey.put_one(&keytype);
             prikey.put_one(&n);
             prikey.put_one(&e);
             prikey.put_one(d);
@@ -286,23 +276,11 @@ impl super::KeyParser for OpenSSH {
             prikey.put_one(p);
             prikey.put_one(q);
 
-            Ok(("ssh-rsa".to_string(), prikey.into_vec(), public_key))
+            (prikey.into_vec(), public_key)
         } else if keytype == b"ssh-dss" {
-            let mut encrypted = Buffer::from_vec(encrypted);
-            let checkint1 = encrypted
-                .take_u32()
-                .ok_or(Error::invalid_format("invalid binary format"))?;
-
-            let checkint2 = encrypted
-                .take_u32()
-                .ok_or(Error::invalid_format("invalid binary format"))?;
-
-            if checkint1 != checkint2 {
-                return Err(Error::invalid_format("checkint1 != checkint2"));
-            }
 
             let mut take_one =
-                || Result::Ok(encrypted.take_one().ok_or_else(invalid_key_format)?.1);
+                || Result::Ok(section.take_one().ok_or_else(invalid_key_format)?.1);
 
             if take_one()? != keytype {
                 return Err(invalid_key_format());
@@ -321,13 +299,38 @@ impl super::KeyParser for OpenSSH {
             private_key.put_one(y);
             private_key.put_one(x);
 
-            Ok(("ssh-dss".to_string(), private_key.into_vec(), public_key))
+            (private_key.into_vec(), public_key)
+        } else if keytype.starts_with(b"ecdsa-sha2-nistp") {
+
+            let curve = section.take_one().ok_or(Error::invalid_format("invalid binary format"))?.1;
+
+            let nid = section.take_one().ok_or(Error::invalid_format("invalid binary format"))?.1;
+
+            let point = section.take_one().ok_or(Error::invalid_format("invalid binary format"))?.1;
+            let e= section.take_one().ok_or(Error::invalid_format("invalid binary format"))?.1;
+
+            let mut private_key = Buffer::new();
+
+            private_key.put_one(curve);
+            private_key.put_one(nid);
+            private_key.put_one(point);
+            private_key.put_one(e);
+
+
+           (private_key.into_vec(), public_key)
         } else {
-            Err(Error::invalid_format(format!(
+            return Err(Error::invalid_format(format!(
                 "unsupport key type => {}",
                 String::from_utf8(keytype)?
-            )))
-        }
+            )));
+        };
+
+        let comment = section.take_one().ok_or_else(invalid_key_format)?.1;
+        let comment = String::from_utf8(comment)?;
+
+
+        Ok(PrivateKey::new(String::from_utf8(keytype)?, public, private, comment))
+        
     }
 
     fn add_cipher(&mut self, name: &str, cipher: Boxtory<dyn Decrypt + Send>) {

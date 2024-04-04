@@ -11,7 +11,7 @@ repository = "https://github.com/Zhou-Pixel/flatline.git"
 
 [dependencies]
 async-channel = "2.2"
-async-trait = "0.1.77"
+async-trait = "0.1"
 bcrypt-pbkdf = "0.10"
 bitflags = "2.4"
 byteorder = "1.5"
@@ -23,7 +23,7 @@ num_enum = "0.7.2"
 openssl = { version = "0.10.63" }
 shadow-rs = "0.27.1"
 thiserror = "1.0"
-tokio = { version = "1", features = ["net", "io-util", "rt", "macros", "fs"] }
+tokio = { version = "1", features = ["net", "io-util", "rt", "macros", "fs", "sync"] }
 
 
 [features]

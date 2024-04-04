@@ -27,22 +27,7 @@ pub trait Stream: Send {
     async fn send_new_keys(&mut self) -> Result<()>;
 }
 
-#[async_trait::async_trait]
-impl<T> Stream for &mut CipherStream<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + Send,
-{
-    async fn send_payload(&mut self, payload: &[u8]) -> Result<()> {
-        CipherStream::send_payload(self, payload).await
-    }
-    async fn recv_packet(&mut self) -> Result<Packet> {
-        CipherStream::recv_packet(self).await
-    }
 
-    async fn send_new_keys(&mut self) -> Result<()> {
-        CipherStream::send_new_keys(self).await
-    }
-}
 
 #[async_trait::async_trait]
 impl<T> Stream for PlainStream<T>
@@ -64,7 +49,7 @@ where
 
 use crate::{
     cipher::{crypt::Encrypt, mac::Mac},
-    ssh::{buffer::Buffer, packet},
+    ssh::buffer::Buffer,
 };
 
 use super::common::{code::*, PAYLOAD_MAXIMUM_SIZE};

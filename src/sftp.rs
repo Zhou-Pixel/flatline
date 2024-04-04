@@ -1,12 +1,11 @@
 use std::cmp::min;
 use std::collections::HashMap;
 
-use async_channel::{Receiver, Sender};
+use byteorder::{BigEndian, ByteOrder};
 use derive_new::new;
 use num_enum::TryFromPrimitive;
 
-use super::Request;
-use super::SubSystem;
+use crate::channel::Channel;
 use crate::error::Result;
 use crate::ssh::common::PAYLOAD_MAXIMUM_SIZE;
 use crate::{
@@ -43,17 +42,17 @@ bitflags! {
 
 #[derive(new)]
 pub struct Sftp {
-    session: Sender<Request>,
-    id: u32,
+    // session: Sender<Request>,
+    // id: u32,
+    channel: Channel,
+
+    #[new(default)]
     request_id: u32,
     version: u32,
-    recver: Receiver<Vec<u8>>,
+    // recver: Receiver<Vec<u8>>,
     ext: HashMap<String, Vec<u8>>,
     #[new(default)]
     buf: Vec<u8>,
-
-    #[new(value = "false")]
-    closed: bool,
 }
 
 #[derive(new)]
@@ -190,21 +189,21 @@ pub struct Dir {
 //     }
 // }
 
-#[derive(new)]
-pub struct SFtpSystem {
-    sender: Sender<Vec<u8>>,
-}
+// #[derive(new)]
+// pub struct SFtpSystem {
+//     sender: Sender<Vec<u8>>,
+// }
 
-#[async_trait::async_trait]
-impl SubSystem for SFtpSystem {
-    async fn append_stderr(&mut self, _: &[u8]) -> Result<()> {
-        Ok(())
-    }
-    async fn append_stdout(&mut self, data: &[u8]) -> Result<()> {
-        let _ = self.sender.send(data.to_vec()).await;
-        Ok(())
-    }
-}
+// #[async_trait::async_trait]
+// impl SubSystem for SFtpSystem {
+//     async fn append_stderr(&mut self, _: &[u8]) -> Result<()> {
+//         Ok(())
+//     }
+//     async fn append_stdout(&mut self, data: &[u8]) -> Result<()> {
+//         let _ = self.sender.send(data.to_vec()).await;
+//         Ok(())
+//     }
+// }
 
 bitflags! {
     #[derive(Clone, Copy, Debug)]
@@ -486,8 +485,8 @@ impl Status {
 
     fn no_ok_and_eof<T>(&self, msg: String) -> Result<T> {
         match self {
-            Status::OK => Err(Error::UnexpectMsg),
-            Status::EOF => Err(Error::UnexpectMsg),
+            Status::OK => Err(Error::ProtocolError),
+            Status::EOF => Err(Error::ProtocolError),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
             Status::FAILURE => Err(Error::SFtpFailure(msg)),
@@ -501,7 +500,7 @@ impl Status {
     fn no_eof<T: Default>(&self, msg: String) -> Result<T> {
         match self {
             Status::OK => Ok(Default::default()),
-            Status::EOF => Err(Error::UnexpectMsg),
+            Status::EOF => Err(Error::ProtocolError),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
             Status::FAILURE => Err(Error::SFtpFailure(msg)),
@@ -514,7 +513,7 @@ impl Status {
 
     fn no_ok<T: Default>(&self, msg: String) -> Result<T> {
         match self {
-            Status::OK => Err(Error::UnexpectMsg),
+            Status::OK => Err(Error::ProtocolError),
             Status::EOF => Ok(Default::default()),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
@@ -553,22 +552,21 @@ enum Message {
     Attributes(Attributes),
 }
 
-impl Drop for Sftp {
-    fn drop(&mut self) {
-        if self.closed {
-            return;
-        }
-        let (sender, _) = async_channel::bounded(1);
-        let _ = self.session.send_blocking(Request::ChannelDrop {
-            id: self.id,
-            sender,
-        });
-    }
-}
+// impl Drop for Sftp {
+//     fn drop(&mut self) {
+//         if self.closed {
+//             return;
+//         }
+//         let _ = self.session.send_blocking(Request::ChannelDrop {
+//             id: self.id,
+//             sender: None,
+//         });
+//     }
+// }
 
 impl Sftp {
 
-    pub fn get_extend(&self, key: &str) -> Option<&[u8]> {
+    pub fn extend(&self, key: &str) -> Option<&[u8]> {
         self.ext.get(key).map(|v| v.as_ref())
     }
 
@@ -576,18 +574,18 @@ impl Sftp {
         self.version
     }
 
-    pub async fn close(mut self) -> Result<()> {
-        self.closed = true;
-        let (sender, recver) = async_channel::bounded(1);
-        self.session
-            .send(Request::ChannelDrop {
-                id: self.id,
-                sender,
-            })
-            .await
-            .map_err(|_| Error::Disconnect)?;
-        recver.recv().await.map_err(|_| Error::Disconnect)?
-    }
+    // pub async fn close(mut self) -> Result<()> {
+    //     self.closed = true;
+    //     let (sender, recver) = async_channel::bounded(1);
+    //     self.session
+    //         .send(Request::ChannelDrop {
+    //             id: self.id,
+    //             sender: Some(sender),
+    //         })
+    //         .await
+    //         .map_err(|_| Error::Disconnect)?;
+    //     recver.recv().await.map_err(|_| Error::Disconnect)?
+    // }
 
     pub fn seek_file(&self, file: &mut File, pos: u64) {
         file.pos = pos;
@@ -606,7 +604,7 @@ impl Sftp {
 
         match packet.msg {
             Message::Status { status, msg, .. } => status.to_result(msg),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -638,7 +636,7 @@ impl Sftp {
                 Ok(data)
             }
             Message::Status { status, msg, .. } => status.to_result(msg),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -700,7 +698,7 @@ impl Sftp {
         match packet.msg {
             // Message::Status { status, .. } if status == Status::OK => Ok(()),
             Message::Status { status, msg, .. } => status.to_result(msg),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -747,7 +745,7 @@ impl Sftp {
             Message::FileHandle(handle) => Ok(Dir::new(handle)),
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
 
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -764,7 +762,7 @@ impl Sftp {
 
         match packet.msg {
             Message::Status { status, msg, .. } => status.to_result(msg),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -782,7 +780,7 @@ impl Sftp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok(msg),
             Message::Name(infos) => Ok(infos),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -800,7 +798,7 @@ impl Sftp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -818,7 +816,7 @@ impl Sftp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -836,7 +834,7 @@ impl Sftp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -859,7 +857,7 @@ impl Sftp {
 
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_eof(msg),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
         
     }
@@ -882,7 +880,7 @@ impl Sftp {
 
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_eof(msg),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
         
     }
@@ -901,7 +899,7 @@ impl Sftp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Name(mut infos) if infos.len() == 1 => Ok(infos.remove(0)),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
 
     }
@@ -918,7 +916,7 @@ impl Sftp {
         let packet = self.wait_for_packet(request_id).await?;
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_eof(msg),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -935,7 +933,7 @@ impl Sftp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Name(infos) if infos.len() == 1 => Ok(infos[0].filename.clone()),
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -993,7 +991,7 @@ impl Sftp {
             Message::FileHandle(handle) => Ok(File::new(handle)),
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
 
-            _ => Err(Error::UnexpectMsg),
+            _ => Err(Error::ProtocolError),
         }
     }
 
@@ -1008,7 +1006,12 @@ impl Sftp {
     }
 
     async fn recv(&mut self) -> Result<Packet> {
-        let data = self.recver.recv().await.map_err(|_| Error::Disconnect)?;
+        let mut data = self.channel.stdout.read_exact(4).await?;
+
+        let len = BigEndian::read_u32(&data);
+
+        data.extend(self.channel.stdout.read_exact(len as usize).await?);
+
         Packet::parse(data).ok_or(Error::invalid_format("unable to parse sftp packet"))
     }
 
@@ -1027,20 +1030,21 @@ impl Sftp {
     }
 
     async fn write(&mut self, data: Vec<u8>) -> Result<usize> {
-        let (sender, recver) = async_channel::bounded(1);
-        let request = Request::ChannelWriteStdout {
-            id: self.id,
-            data,
-            sender,
-        };
+        // let (sender, recver) = async_channel::bounded(1);
+        // let request = Request::ChannelWriteStdout {
+        //     id: self.channel.id,
+        //     data,
+        //     sender,
+        // };
 
-        self.session
-            .send(request)
-            .await
-            .map_err(|_| Error::Disconnect)?;
+        // self.session
+        //     .send(request)
+        //     .await
+        //     .map_err(|_| Error::Disconnect)?;
 
-        let size = recver.recv().await.map_err(|_| Error::Disconnect)??;
+        // let size = recver.recv().await.map_err(|_| Error::Disconnect)??;
 
+        let size = self.channel.write(data).await?;
         Ok(size)
     }
 }

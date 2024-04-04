@@ -5,7 +5,8 @@ use tokio::net::TcpStream;
 
 use crate::handshake::Config;
 use crate::keys::{self, KeyParser};
-use crate::session::{Session, Userauth};
+use crate::session::Session;
+use crate::msg::Userauth;
 use crate::sftp::Permissions;
 
 // const IP: &str = "127.0.0.1:22";
@@ -30,15 +31,11 @@ async fn open_session(config: Config) -> Session {
 async fn userauth_publickey() {
     let openssh = keys::openssh::OpenSSH::default();
 
-    let private_key_file = tokio::fs::read("/home/zhou/.ssh/id_rsap").await.unwrap();
-    let public_key_file = tokio::fs::read("/home/zhou/.ssh/id_rsap.pub").await.unwrap();
+    let private_key_file = tokio::fs::read("/home/zhou/.ssh/id_ecdsa256").await.unwrap();
+    let public_key_file = tokio::fs::read("/home/zhou/.ssh/id_ecdsa256.pub").await.unwrap();
 
     let key = openssh.parse_privatekey(&private_key_file, Some(b"123456")).unwrap();
-    let key2 = openssh.parse_publickey(&public_key_file).unwrap();
-
-    println!("key2 {:?}", key2);
-
-    println!("key is {:?} {} {}", key, key.1.len(), key.2.len());
+    let _ = openssh.parse_publickey(&public_key_file).unwrap();
 
     let config = Config::default();
 
@@ -47,7 +44,7 @@ async fn userauth_publickey() {
         .unwrap();
 
 
-    let status = session.userauth_publickey(USER, "rsa-sha2-512", key.2, key.1).await.unwrap();
+    let status = session.userauth_publickey(USER, key.key_type, key.public_key, key.private_key).await.unwrap();
 
     println!("{:?}", status);
 
@@ -55,9 +52,8 @@ async fn userauth_publickey() {
 
 #[tokio::test]
 async fn random() {
-
     for _ in 0..100 {
-        echo_hello(rand_config(), 1).await;
+        echo_hello(rand_config(), 10).await
     }
 }
 
@@ -103,8 +99,6 @@ async fn open_sftp() {
             break;
         }
 
-        println!("{}", infos.len());
-        println!("{:?}", infos.iter().map(|v| v.filename.clone()).collect::<Vec<String>>())
 
     }
 
@@ -133,11 +127,13 @@ async fn echo_hello(config: Config, times: usize) {
 
         let mut channel = session.channel_open_default().await.unwrap();
         let status = channel.exec_and_wait("echo \"hello\"").await.unwrap();
-        assert!(matches!(status, crate::session::ExitStatus::Normal(0)));
+        assert!(matches!(status, crate::msg::ExitStatus::Normal(0)));
         let buf = channel.read().await.unwrap();
+        channel.close().await.unwrap();
         assert_eq!(buf, b"hello\n");
     }
 
+    session.disconnect_default().await.unwrap();
     // channel.close().await.unwrap();
 
 }

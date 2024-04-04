@@ -1,12 +1,12 @@
 use super::*;
+use crate::error::{Error, Result};
 use derive_new::new;
+use indexmap::IndexMap;
 use openssl::{
     cipher::{Cipher, CipherRef},
-    cipher_ctx::CipherCtx, symm::{self, Crypter},
+    cipher_ctx::CipherCtx,
+    symm::{self, Crypter},
 };
-use crate::error::{Error, Result};
-use indexmap::IndexMap;
-
 
 algo_list!(
     encrypt_all,
@@ -52,7 +52,6 @@ pub struct Gcm {
 
     #[new(value = "16")]
     tag_len: usize,
-    
     #[new(value = "true")]
     increase_iv: bool,
     #[new(default)]
@@ -60,15 +59,27 @@ pub struct Gcm {
     #[new(default)]
     key: Option<Vec<u8>>,
     #[new(default)]
-    ctx: Option<Crypter>
+    ctx: Option<Crypter>,
 }
 
 impl Gcm {
     fn aes128_gcm_openssh() -> Self {
-        Self::new("aes128-gcm@openssh.com".to_string(), symm::Cipher::aes_128_gcm(), 16, 16, 12)
+        Self::new(
+            "aes128-gcm@openssh.com".to_string(),
+            symm::Cipher::aes_128_gcm(),
+            16,
+            16,
+            12,
+        )
     }
     fn aes256_gcm_openssh() -> Self {
-        Self::new("aes256-gcm@openssh.com".to_string(), symm::Cipher::aes_256_gcm(), 16, 32, 12)
+        Self::new(
+            "aes256-gcm@openssh.com".to_string(),
+            symm::Cipher::aes_256_gcm(),
+            16,
+            32,
+            12,
+        )
     }
 }
 
@@ -78,14 +89,13 @@ impl Gcm {
     }
 
     fn reset(&mut self, mode: symm::Mode) -> Result<()> {
-
         match (&self.key, &mut self.iv) {
             /*
-                    With AES-GCM, the 12-octet IV is broken into two fields: a 4-octet
-                    fixed field and an 8-octet invocation counter field.  The invocation
-                    field is treated as a 64-bit integer and is incremented after each
-                    invocation of AES-GCM to process a binary packet.
-             */
+                   With AES-GCM, the 12-octet IV is broken into two fields: a 4-octet
+                   fixed field and an 8-octet invocation counter field.  The invocation
+                   field is treated as a 64-bit integer and is incremented after each
+                   invocation of AES-GCM to process a binary packet.
+            */
             (Some(key), Some(iv)) => {
                 assert_eq!(iv.len(), 12);
                 if self.increase_iv {
@@ -99,12 +109,11 @@ impl Gcm {
                 let ctx = Crypter::new(self.cipher, mode, key, Some(iv))?;
                 self.ctx = Some(ctx);
                 Ok(())
-            },
-            _ => Err(Error::ub("uninitlize"))
+            }
+            _ => Err(Error::ub("uninitlize")),
         }
     }
 }
-
 
 impl Encrypt for Gcm {
     fn name(&self) -> &str {
@@ -152,11 +161,11 @@ impl Encrypt for Gcm {
                 let len = self.get_ctx()?.update(data, &mut output[base..])?;
                 output.truncate(base + len);
                 Ok(len)
-            },
+            }
             None => {
                 self.get_ctx()?.aad_update(data)?;
                 Ok(0)
-            },
+            }
         }
     }
 
@@ -174,7 +183,7 @@ impl Encrypt for Gcm {
         self.reset(symm::Mode::Encrypt)?;
         Ok(tag)
     }
-    
+
     fn tag_len(&self) -> usize {
         self.tag_len
     }
@@ -226,11 +235,11 @@ impl Decrypt for Gcm {
                 let len = self.get_ctx()?.update(data, &mut output[base..])?;
                 output.truncate(base + len);
                 Ok(len)
-            },
+            }
             None => {
                 self.get_ctx()?.aad_update(data)?;
                 Ok(0)
-            },
+            }
         }
     }
 
@@ -247,13 +256,11 @@ impl Decrypt for Gcm {
         self.get_ctx()?.set_tag(data)?;
         Ok(())
     }
-    
+
     fn tag_len(&self) -> usize {
         self.tag_len
     }
 }
-
-
 
 pub trait Encrypt {
     fn name(&self) -> &str;
@@ -350,7 +357,7 @@ impl Encrypt for CbcCtr {
     fn name(&self) -> &str {
         &self.name
     }
-    
+
     fn tag_len(&self) -> usize {
         0
     }
@@ -375,6 +382,7 @@ impl CbcCtr {
             None => Err(Error::ub("uninitilize")),
         }
     }
+
     fn aes256_ctr() -> Self {
         Self {
             name: "aes256-ctr".to_string(),
@@ -510,7 +518,7 @@ impl Decrypt for CbcCtr {
     fn name(&self) -> &str {
         &self.name
     }
-    
+
     fn tag_len(&self) -> usize {
         0
     }
@@ -523,5 +531,3 @@ pub struct CipherArgs {
     key_len: usize,
     iv_len: usize,
 }
-
-

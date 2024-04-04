@@ -3,7 +3,7 @@ use std::{io, string::FromUtf8Error};
 use openssl::error::ErrorStack;
 use thiserror::Error;
 
-use crate::session::ChannelOpenFailureReson;
+use super::msg::ChannelOpenFailureReson;
 
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -29,8 +29,8 @@ pub enum Error {
     #[error("The peer does not support ssh2")]
     Ssh2Unsupport,
 
-    #[error("unexpect msg from server")]
-    UnexpectMsg,
+    #[error("Unexpect msg from server")]
+    ProtocolError,
 
     #[error("Algorithm negotiation failed")]
     NegotiationFailed,

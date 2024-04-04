@@ -13,7 +13,8 @@ use openssl::{
     md::{Md, MdRef},
     md_ctx::MdCtx,
     nid::Nid,
-    pkey::PKey,
+    pkey::{Id, PKey},
+    pkey_ctx::PkeyCtx,
 };
 
 use super::hash::{Hash, MdWrapper};
@@ -26,6 +27,11 @@ algo_list! (
     new_all,
     new_kex_by_name,
     dyn KeyExChange + Send,
+    "curve25519-sha256@libssh.org" => Curve25519::curve25519_sha256(),
+    "curve25519-sha256" => Curve25519::curve25519_sha256(),
+    "ecdh-sha2-nistp256" => ECDHKexExchange::ecdh_sha2_nistp256(),
+    "ecdh-sha2-nistp384" => ECDHKexExchange::ecdh_sha2_nistp384(),
+    "ecdh-sha2-nistp521" => ECDHKexExchange::ecdh_sha2_nistp521(),
     "diffie-hellman-group14-sha256" => DiffieHellmanKeyExchange::dh_group14_sha256(),
     "diffie-hellman-group16-sha512" => DiffieHellmanKeyExchange::dh_group16_sha512(),
     "diffie-hellman-group16-sha256" => DiffieHellmanKeyExchange::dh_group16_sha256(),
@@ -33,16 +39,13 @@ algo_list! (
     "diffie-hellman-group18-sha512" => DiffieHellmanKeyExchange::dh_group18_sha512(),
     "diffie-hellman-group-exchange-sha256" => DiffieHellmanKeyExchangeX::sha256(),
     "diffie-hellman-group-exchange-sha1" => DiffieHellmanKeyExchangeX::sha1(),
-    "ecdh-sha2-nistp256" => ECDHKexExchange::ecdh_sha2_nistp256(),
-    "ecdh-sha2-nistp384" => ECDHKexExchange::ecdh_sha2_nistp384(),
-    "ecdh-sha2-nistp521" => ECDHKexExchange::ecdh_sha2_nistp521(),
     "diffie-hellman-group15-sha512" => DiffieHellmanKeyExchange::dh_group15_sha512(),
     "diffie-hellman-group17-sha512" => DiffieHellmanKeyExchange::dh_group17_sha512(),
     "diffie-hellman-group1-sha1" => DiffieHellmanKeyExchange::dh_group1_sha1(),
 );
 
 #[async_trait::async_trait]
-pub trait KeyExChange: Send {
+pub trait KeyExChange {
     async fn kex(&self, config: Dependency, stream: &mut dyn Stream) -> Result<Summary>;
 }
 
@@ -125,7 +128,7 @@ pub struct Summary {
     pub server_dh_value: Vec<u8>,
     // pub server_signature_type: String,
     pub server_signature: Vec<u8>, // 服务器传过来的
-    pub client_signature: Vec<u8>, // 通过算法计算出来的
+    pub client_hash: Vec<u8>, // 通过算法计算出来的
     pub session_id: Vec<u8>,
     pub secret_key: Vec<u8>,
     pub hash: Box<dyn Hash + Send>,
@@ -177,7 +180,7 @@ impl<'a> KeyExChange for DiffieHellmanKeyExchange<'a> {
         // let code = ReadBytesExt::read_u8(&mut payload)?;
         let code = payload.take_u8().unwrap();
         if code != SSH_MSG_KEXDH_REPLY {
-            return Err(Error::UnexpectMsg);
+            return Err(Error::ProtocolError);
         }
 
         // let hostkey_parser = |data: Vec<u8>| {
@@ -335,7 +338,7 @@ impl<'a> KeyExChange for DiffieHellmanKeyExchange<'a> {
             // server_signature_type: String::from_utf8(signtype)?,
             server_signature: sign,
             secret_key,
-            client_signature: session_id.clone(),
+            client_hash: session_id.clone(),
             session_id,
             hash: Box::new(hash),
         })
@@ -634,7 +637,7 @@ impl KeyExChange for DiffieHellmanKeyExchangeX {
             .ok_or(Error::invalid_format("unable to parse msg"))?;
 
         if code != SSH_MSG_KEX_DH_GEX_GROUP {
-            return Err(Error::UnexpectMsg);
+            return Err(Error::ProtocolError);
         }
 
         let hashpg = payload.clone().into_vec();
@@ -701,7 +704,7 @@ impl KeyExChange for DiffieHellmanKeyExchangeX {
         // let code = ReadBytesExt::read_u8(&mut payload)?;
         let code = payload.take_u8().unwrap();
         if code != SSH_MSG_KEX_DH_GEX_REPLY {
-            return Err(Error::UnexpectMsg);
+            return Err(Error::ProtocolError);
         }
 
         // let hostkey_parser = |data: Vec<u8>| {
@@ -861,7 +864,7 @@ impl KeyExChange for DiffieHellmanKeyExchangeX {
             // server_signature_type: String::from_utf8(signtype)?,
             server_signature: sign,
             secret_key,
-            client_signature: session_id.clone(),
+            client_hash: session_id.clone(),
             session_id,
             hash: Box::new(hash),
         })
@@ -918,7 +921,7 @@ impl KeyExChange for ECDHKexExchange {
             .ok_or(Error::invalid_format("invalid packet format"))?;
 
         if code != SSH2_MSG_KEX_ECDH_REPLY {
-            return Err(Error::UnexpectMsg);
+            return Err(Error::ProtocolError);
         }
 
         // hostkey
@@ -997,5 +1000,117 @@ impl KeyExChange for ECDHKexExchange {
     }
 }
 
+#[derive(new)]
+struct Curve25519 {
+    hash: &'static MdRef,
+}
+
+impl Curve25519 {
+    fn curve25519_sha256() -> Self {
+        Self::new(Md::sha256())
+    }
+}
 
 
+#[async_trait::async_trait]
+impl KeyExChange for Curve25519 {
+    async fn kex(&self, config: Dependency, stream: &mut dyn Stream) -> Result<Summary> {
+        let mut ctx = PkeyCtx::new_id(Id::X25519)?;
+
+        ctx.keygen_init()?;
+
+        let private = ctx.keygen()?;
+
+
+        let public_bytes = private.raw_public_key()?;
+
+        let mut buffer = Buffer::new();
+
+        buffer.put_u8(SSH2_MSG_KEX_ECDH_INIT);
+        buffer.put_one(&public_bytes);
+
+        stream.send_payload(buffer.as_ref()).await?;
+
+        let packet = stream.recv_packet().await?;
+
+        let mut payload = Buffer::from_vec(packet.payload);
+
+        if payload.take_u8() != Some(SSH2_MSG_KEX_ECDH_REPLY) {
+            return Err(Error::ProtocolError);
+        }
+
+        // hostkey
+        let (_, hostkey) = payload
+            .take_one()
+            .ok_or(Error::invalid_format("invalid packet format"))?;
+
+        // server public key
+        let (_, keyqs) = payload
+            .take_one()
+            .ok_or(Error::invalid_format("invalid packet format"))?;
+
+        // server signature
+        let (_, signature) = payload
+            .take_one()
+            .ok_or(Error::invalid_format("invalid packet format"))?;
+
+        let server_public = PKey::public_key_from_raw_bytes(&keyqs, Id::X25519)?;
+
+        let mut server_ctx = PkeyCtx::new(&private)?;
+
+        server_ctx.derive_init()?;
+        server_ctx.derive_set_peer(&server_public)?;
+        let size = server_ctx.derive(None)?;
+
+        let mut secret_key = vec![0; size];
+
+        server_ctx.derive(Some(&mut secret_key))?;
+
+        
+        let mut hash = MdWrapper::initialize(self.hash)?;
+
+        let mut update = |data: &[u8]| {
+            let buffer = Buffer::from_one(data);
+            hash.update(buffer.as_ref())?;
+            Result::Ok(())
+        };
+
+        fn check(data: &[u8]) -> Vec<u8> {
+            let bn = BigNum::from_slice(data).unwrap();
+            let mut bndata = bn.to_vec();
+
+            if bn.num_bits() % 8 == 0 {
+                bndata.insert(0, 0);
+            }
+
+            bndata
+        }
+
+        let secret_key = check(&secret_key);
+        // check(&pkey);
+
+        update(config.client_banner.trim_end_matches("\r\n").as_bytes())?;
+        update(config.server_banner.trim_end_matches("\r\n").as_bytes())?;
+        update(&config.client_kexinit)?;
+        update(&config.server_kexinit)?;
+        update(&hostkey)?;
+        update(&public_bytes)?;
+        update(&keyqs)?;
+        update(&secret_key)?;
+
+        let client_signature = hash.finalize()?;
+
+        let sum = Summary::new(
+            hostkey,
+            keyqs,
+            signature,
+            client_signature.clone(),
+            client_signature,
+            secret_key,
+            Box::new(hash),
+        );
+
+        Ok(sum)
+
+    }
+}

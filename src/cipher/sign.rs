@@ -21,6 +21,9 @@ algo_list!(
     "rsa-sha2-512" => Rsa::rsa_sha2_512(),
     "ssh-rsa" => Rsa::ssh_rsa(),
     "ssh-dss" => Dsa::ssh_dss(),
+    "ecdsa-sha2-nistp521" => Ecdsa::ecdsa_sha2_nistp521(),
+    "ecdsa-sha2-nistp256" => Ecdsa::ecdsa_sha2_nistp256(),
+    "ecdsa-sha2-nistp384" => Ecdsa::ecdsa_sha2_nistp384(),
 );
 
 algo_list!(
@@ -28,11 +31,11 @@ algo_list!(
     new_verify_all,
     new_verify_by_name,
     dyn Verify + Send,
-    // "ssh-ed25519" => Ed25519::new(None),
-    // "rsa-sha2-256" => Rsa::rsa_sha2_256(),
-    // "rsa-sha2-512" => Rsa::rsa_sha2_512(),
-    // "ssh-rsa" => Rsa::ssh_rsa(),
-    // "ssh-dss" => Dsa::ssh_dss(),
+    "ssh-ed25519" => Ed25519::new(None),
+    "rsa-sha2-256" => Rsa::rsa_sha2_256(),
+    "rsa-sha2-512" => Rsa::rsa_sha2_512(),
+    "ssh-rsa" => Rsa::ssh_rsa(),
+    "ssh-dss" => Dsa::ssh_dss(),
     "ecdsa-sha2-nistp521" => Ecdsa::ecdsa_sha2_nistp521(),
     "ecdsa-sha2-nistp256" => Ecdsa::ecdsa_sha2_nistp256(),
     "ecdsa-sha2-nistp384" => Ecdsa::ecdsa_sha2_nistp384(),
@@ -488,6 +491,59 @@ impl<T> Ecdsa<T> {
 
     fn ecdsa_sha2_nistp521() -> Self {
         Self::new("ecdsa-sha2-nistp521".to_string(), Nid::SECP521R1, Md::sha512())
+    }
+}
+
+impl Signature for Ecdsa<Private> {
+    fn initialize(&mut self, key: &[u8]) -> Result<()> {
+        let mut key = Buffer::from_vec(key.to_vec());
+
+        let keytype = key.take_one().ok_or_else(invalid_key_format)?.1;
+        if keytype != self.name.as_bytes() {
+            return Err(invalid_key_format());
+        }
+
+        let nid = key.take_one().ok_or_else(invalid_key_format)?.1;
+        if self.name.ends_with(&String::from_utf8(nid)?) {
+            return Err(invalid_key_format());
+        }
+
+        let public_key = key.take_one().ok_or_else(invalid_key_format)?.1;
+        let e = key.take_one().ok_or_else(invalid_key_format)?.1;
+
+
+        let eckey = EcKey::from_curve_name(self.nid)?;
+        let group = eckey.group();
+
+        let mut bnctx = BigNumContext::new()?;
+        let point = EcPoint::from_bytes(group, &public_key, &mut bnctx)?;
+        // let point = EcKey::from_public_key(group, &point)?;
+
+        let e = BigNum::from_slice(&e)?;
+        let private = EcKey::from_private_components(group, &e, &point)?;
+
+
+        let pkey = PKey::from_ec_key(private)?;
+
+        self.key = Some(pkey);
+
+        Ok(())
+
+    }
+
+    fn signature(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+        let hash = self.calculate_hash(data)?;
+
+        let key = self.get_key()?;
+
+        let mut ctx = PkeyCtx::new(key)?;
+
+        ctx.sign_init()?;
+
+        let mut out = vec![];
+        ctx.sign_to_vec(&hash, &mut out)?;
+
+        Ok(out)
     }
 }
 

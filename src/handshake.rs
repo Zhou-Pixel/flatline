@@ -226,7 +226,7 @@ pub(crate) async fn method_exchange(stream: &mut dyn Stream, config: &Config) ->
     let reply = stream.recv_packet().await?;
 
     if reply.payload.is_empty() || reply.payload[0] != SSH_MSG_KEXINIT {
-        return Err(Error::UnexpectMsg);
+        return Err(Error::ProtocolError);
     }
 
     let parser = || {
@@ -324,7 +324,7 @@ impl Algorithm {
             &mut result.hash,
             secret_key.as_ref(),
             &result.session_id,
-            &result.client_signature,
+            &result.client_hash,
             b'A',
             self.client_crypt.iv_len(),
         )?;
@@ -333,7 +333,7 @@ impl Algorithm {
             &mut result.hash,
             secret_key.as_ref(),
             &result.session_id,
-            &result.client_signature,
+            &result.client_hash,
             b'C',
             self.client_crypt.key_len(),
         )?;
@@ -344,7 +344,7 @@ impl Algorithm {
             &mut result.hash,
             secret_key.as_ref(),
             &result.session_id,
-            &result.client_signature,
+            &result.client_hash,
             b'B',
             self.server_crypt.iv_len(),
         )?;
@@ -352,7 +352,7 @@ impl Algorithm {
             &mut result.hash,
             secret_key.as_ref(),
             &result.session_id,
-            &result.client_signature,
+            &result.client_hash,
             b'D',
             self.server_crypt.key_len(),
         )?;
@@ -363,7 +363,7 @@ impl Algorithm {
             &mut result.hash,
             secret_key.as_ref(),
             &result.session_id,
-            &result.client_signature,
+            &result.client_hash,
             b'E',
             self.client_mac.key_len(),
         )?;
@@ -374,7 +374,7 @@ impl Algorithm {
             &mut result.hash,
             secret_key.as_ref(),
             &result.session_id,
-            &result.client_signature,
+            &result.client_hash,
             b'F',
             self.server_mac.key_len(),
         )?;
@@ -494,7 +494,7 @@ pub(crate) async fn new_keys(stream: &mut dyn Stream) -> Result<()> {
     stream.send_new_keys().await?;
     let packet = stream.recv_packet().await?;
     if packet.payload[0] != SSH_MSG_NEWKEYS {
-        Err(Error::UnexpectMsg)
+        Err(Error::ProtocolError)
     } else {
         Ok(())
     }
