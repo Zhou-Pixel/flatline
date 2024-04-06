@@ -355,7 +355,8 @@ where
                 self.append_channel_stdout(recipient, data).await?;
             }
             Message::ChannelWindowAdjust { recipient, count } => {
-                self.add_channel_bytes_count(recipient, count);
+                self.add_channel_bytes_count(recipient, count)?;
+                self.channel_flush_stdout(recipient).await?;
             }
             Message::ChannelStderrData { recipient, data } => {
                 self.append_channel_stderr(recipient, data).await?;
@@ -414,13 +415,9 @@ where
         true
     }
 
-    fn add_channel_bytes_count(&mut self, recipeint: u32, count: u32) -> bool {
-        if let Some(channel) = self.channels.get_mut(&recipeint) {
-            channel.server.size += count;
-            true
-        } else {
-            false
-        }
+    fn add_channel_bytes_count(&mut self, recipeint: u32, count: u32) -> Result<()> {
+        self.get_server_channel(recipeint)?.server.size += count;
+        Ok(())
     }
 
     async fn channel_window_adjust(
@@ -562,6 +559,13 @@ where
                 let _ = self.session_disconnect(reson, &desc).await;
                 return true;
             }
+            Request::ChannelFlushStdout { id, sender } => {
+                let res = self.channel_flush_stdout_blocking(id).await;
+
+
+                let _ = sender.send(res).await;
+
+            },
         }
         false
     }
@@ -691,7 +695,96 @@ where
         Ok(status)
     }
 
-    async fn channel_write_stdout(&mut self, id: u32, data: &[u8]) -> Result<usize> {
+    async fn channel_flush_stdout_blocking(&mut self, id: u32) -> Result<()> {
+
+        let channel = self
+            .channels
+            .get_mut(&id)
+            .ok_or(Error::ub("Failed to find channel"))?;
+
+        if channel.client.closed || channel.server.closed {
+            return Err(Error::ChannelClosed);
+        }
+
+        if channel.client.eof {
+            return Err(Error::ChannelEof);
+        }
+
+        while !channel.stdout_buf.is_empty() {
+            while channel.server.size == 0 {
+                channel_loop!(
+                    self,
+                    id,
+                    Message::ChannelWindowAdjust { recipient, count } if recipient == id => {
+                        self.add_channel_bytes_count(id, count)?;
+                    },
+                );
+            }
+            let mut buffer = Buffer::new();
+
+            buffer.put_u8(SSH_MSG_CHANNEL_DATA);
+
+            buffer.put_u32(channel.server.id);
+
+
+            let len = if channel.server.size as usize >= channel.stdout_buf.len() {
+                channel.stdout_buf.len()
+            } else {
+                channel.server.size as _
+            };
+    
+            buffer.put_one(&channel.stdout_buf[..len]);
+    
+            self.stream.send_payload(buffer.as_ref()).await?;
+            channel.stdout_buf.drain(..len);
+            channel.server.size -= len as u32;
+        }
+
+
+
+        Ok(())
+    }
+
+    async fn channel_flush_stdout(&mut self, id: u32) -> Result<()> {
+        let channel = self
+            .channels
+            .get_mut(&id)
+            .ok_or(Error::ub("Failed to find channel"))?;
+
+        if channel.client.closed || channel.server.closed {
+            return Err(Error::ChannelClosed);
+        }
+
+        if channel.client.eof {
+            return Err(Error::ChannelEof);
+        }
+
+        while !channel.stdout_buf.is_empty() && channel.server.size != 0 {
+            let mut buffer = Buffer::new();
+
+            buffer.put_u8(SSH_MSG_CHANNEL_DATA);
+
+            buffer.put_u32(channel.server.id);
+
+
+            let len = if channel.server.size as usize >= channel.stdout_buf.len() {
+                channel.stdout_buf.len()
+            } else {
+                channel.server.size as _
+            };
+    
+            buffer.put_one(&channel.stdout_buf[..len]);
+    
+            self.stream.send_payload(buffer.as_ref()).await?;
+            channel.stdout_buf.drain(..len);
+            channel.server.size -= len as u32;
+            
+        }
+
+        Ok(())
+    }
+
+    async fn channel_write_stdout(&mut self, id: u32, data: &[u8]) -> Result<bool> {
         // let (channel, stream) = func(self)?;
         let channel = self
             .channels
@@ -706,9 +799,13 @@ where
             return Err(Error::ChannelEof);
         }
 
-        if channel.server.size == 0 || data.is_empty() {
-            return Ok(0);
+        if data.is_empty() {
+            return Ok(true);
+        } else if channel.server.size == 0 {
+            return Ok(false);
         }
+
+        channel.stdout_buf.extend(data);
 
         let mut buffer = Buffer::new();
 
@@ -716,19 +813,19 @@ where
 
         buffer.put_u32(channel.server.id);
 
-        let len = if channel.server.size as usize >= data.len() {
-            data.len()
+        let len = if channel.server.size as usize >= channel.stdout_buf.len() {
+            channel.stdout_buf.len()
         } else {
             channel.server.size as _
         };
 
-        buffer.put_one(&data[..len]);
+        buffer.put_one(&channel.stdout_buf[..len]);
 
         self.stream.send_payload(buffer.as_ref()).await?;
-
+        channel.stdout_buf.drain(..len);
         channel.server.size -= len as u32;
 
-        Ok(len)
+        Ok(channel.stdout_buf.is_empty())
     }
 
     async fn channel_drop(&mut self, id: u32) -> Result<()> {
@@ -1160,13 +1257,8 @@ where
 
             // self.stream.send_payload(buffer.as_ref()).await?;
 
-            let size = self
-                .channel_write_stdout(client_id, buffer.as_ref())
+            self.channel_write_stdout(client_id, buffer.as_ref())
                 .await?;
-
-            if size < buffer.len() {
-                return Err(Error::TemporarilyUnavailable);
-            }
 
             loop {
                 let msg = self.recv_msg().await?;

@@ -61,7 +61,7 @@ pub(crate) enum Request {
     ChannelWriteStdout {
         id: u32,
         data: Vec<u8>,
-        sender: Sender<Result<usize>>,
+        sender: Sender<Result<bool>>,
     },
     ChannelSetEnv {
         id: u32,
@@ -77,6 +77,10 @@ pub(crate) enum Request {
     ChannelEof {
         id: u32,
         sender: Sender<Result<()>>
+    },
+    ChannelFlushStdout {
+        id: u32,
+        sender: Sender<Result<()>>,
     },
     SFtpOpen {
         session: Sender<Request>,

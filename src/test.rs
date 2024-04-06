@@ -107,9 +107,9 @@ async fn open_sftp() {
     let content = "123456789\n";
     let mut sender = channel.scp_sender("./Documents/test1.scp.txt", content.len(), Permissions::p0755(), None).await.unwrap();
 
-    let size = sender.send(content).await.unwrap();
+    let im = sender.send(content).await.unwrap();
 
-    assert_eq!(size, content.len());
+    assert!(im);
 
     sender.finish().await.unwrap();
 }

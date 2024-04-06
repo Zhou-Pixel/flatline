@@ -9,6 +9,18 @@ use byteorder::{ReadBytesExt, WriteBytesExt, BE};
 #[repr(transparent)]
 pub struct Buffer(Vec<u8>);
 
+impl Into<Vec<u8>> for Buffer {
+    fn into(self) -> Vec<u8> {
+        self.into_vec()
+    }
+}
+
+impl From<Vec<u8>> for Buffer {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value)
+    }
+}
+
 impl AsRef<[u8]> for Buffer {
     fn as_ref(&self) -> &[u8] {
         &self.0

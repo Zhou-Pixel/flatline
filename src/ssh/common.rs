@@ -1,3 +1,4 @@
+#![allow(unused)]
 pub mod code {
     pub const SSH_MSG_DISCONNECT: u8 = 1;
     pub const SSH_MSG_IGNORE: u8 = 2;

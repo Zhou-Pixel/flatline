@@ -52,6 +52,15 @@ impl Channel {
         }
     }
 
+    pub async fn flush(&mut self) -> Result<()> {
+        let (sender, recver) = async_channel::bounded(1);
+        let request = Request::ChannelFlushStdout { id: self.id, sender };
+
+        self.send_request(request).await?;
+
+        recver.recv().await.map_err(|_| Error::Disconnect)?
+    }
+
     pub async fn scp_sender(
         mut self,
         path: &str,
@@ -197,7 +206,7 @@ impl Channel {
         self.stderr.read().await
     }
 
-    pub async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<usize> {
+    pub async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<bool> {
         let data: Vec<u8> = data.into();
 
         let (sender, recver) = async_channel::bounded(1);
@@ -271,6 +280,11 @@ pub(crate) struct ChannelInner {
     pub(crate) server: Endpoint,
     pub(crate) stdout: IOSender,
     pub(crate) stderr: IOSender,
+    
+    #[new(default)]
+    pub(crate) stdout_buf: Vec<u8>,
+    // #[new(default)]
+    // pub(crate) stderr_buf: Vec<u8>,
     // pub(crate) subsystem: Box<dyn SubSystem + Send>,
     pub(crate) exit_status: Option<ExitStatus>,
 }

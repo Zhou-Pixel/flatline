@@ -51,8 +51,6 @@ pub struct SFtp {
     version: u32,
     // recver: Receiver<Vec<u8>>,
     ext: HashMap<String, Vec<u8>>,
-    #[new(default)]
-    buf: Vec<u8>,
 }
 
 #[derive(new)]
@@ -565,6 +563,7 @@ enum Message {
 // }
 
 impl SFtp {
+    const MAX_SFTP_PACKET: usize = 31000;
 
     pub fn extend(&self, key: &str) -> Option<&[u8]> {
         self.ext.get(key).map(|v| v.as_ref())
@@ -572,6 +571,10 @@ impl SFtp {
 
     pub fn version(&self) -> u32 {
         self.version
+    }
+
+    pub async fn flush(&mut self) -> Result<()> {
+        self.channel.flush().await
     }
 
     // pub async fn close(mut self) -> Result<()> {
@@ -642,14 +645,14 @@ impl SFtp {
         packet.put_u8(code);
         packet.put_bytes(bytes);
 
-        self.write_all(packet.as_ref()).await
+        self.write(packet).await?;
+        Ok(())
     }
 
     pub async fn write_file(&mut self, file: &mut File, data: &[u8]) -> Result<()> {
 
 
-        let max = PAYLOAD_MAXIMUM_SIZE - 4 - 1 - 4 - 4 - file.handle.len() - 8 - 4 - 1 - 4 - 4 - 1000;
-        // let max = 1024;
+        let max = Self::MAX_SFTP_PACKET;
         for i in (0..data.len()).step_by(max) {
 
 
@@ -1022,16 +1025,16 @@ impl SFtp {
         self.request_id
     }
 
-    async fn write_all(&mut self, data: &[u8]) -> Result<()> {
-        self.buf.extend(data);
-        while !self.buf.is_empty() {
-            let size = self.write(self.buf.clone()).await?;
-            self.buf.drain(0..size);
-        }
-        Ok(())
-    }
+    // async fn write_all(&mut self, data: &[u8]) -> Result<()> {
+    //     self.buf.extend(data);
+    //     while !self.buf.is_empty() {
+    //         let size = self.write(self.buf.clone()).await?;
+    //         self.buf.drain(0..size);
+    //     }
+    //     Ok(())
+    // }
 
-    async fn write(&mut self, data: Vec<u8>) -> Result<usize> {
+    async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<bool> {
         // let (sender, recver) = async_channel::bounded(1);
         // let request = Request::ChannelWriteStdout {
         //     id: self.channel.id,
@@ -1046,7 +1049,6 @@ impl SFtp {
 
         // let size = recver.recv().await.map_err(|_| Error::Disconnect)??;
 
-        let size = self.channel.write(data).await?;
-        Ok(size)
+        self.channel.write(data).await
     }
 }
