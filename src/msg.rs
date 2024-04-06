@@ -74,7 +74,7 @@ pub(crate) enum Request {
         signal: Signal,
         sender: Sender<Result<()>>,
     },
-    ChannelEof {
+    ChannelEOF {
         id: u32,
         sender: Sender<Result<()>>
     },
@@ -171,7 +171,7 @@ pub(crate) enum Message {
         recipient: u32,
         reson: ChannelOpenFailureReson,
         desc: String,
-        tag: String,
+        _tag: String,
     },
     ChannelOpenConfirmation {
         recipient: u32,
@@ -266,7 +266,7 @@ impl Message {
                         recipient,
                         reson,
                         desc,
-                        tag,
+                        _tag: tag,
                     })
                 }
                 SSH_MSG_USERAUTH_SUCCESS => Some(Self::UserauthSuccess),

@@ -537,7 +537,7 @@ where
 
                 let _ = sender.send(res).await;
             }
-            Request::ChannelEof { id, sender } => {
+            Request::ChannelEOF { id, sender } => {
                 let res = self.channel_eof(id).await;
 
                 let _ = sender.send(res).await;
@@ -707,7 +707,7 @@ where
         }
 
         if channel.client.eof {
-            return Err(Error::ChannelEof);
+            return Err(Error::ChannelEOF);
         }
 
         while !channel.stdout_buf.is_empty() {
@@ -756,7 +756,7 @@ where
         }
 
         if channel.client.eof {
-            return Err(Error::ChannelEof);
+            return Err(Error::ChannelEOF);
         }
 
         while !channel.stdout_buf.is_empty() && channel.server.size != 0 {
@@ -796,7 +796,7 @@ where
         }
 
         if channel.client.eof {
-            return Err(Error::ChannelEof);
+            return Err(Error::ChannelEOF);
         }
 
         if data.is_empty() {
@@ -850,6 +850,7 @@ where
         }
 
         if !channel.server.closed {
+            // do not remove, because we need to wait for channel close msg from server
             self.channels.insert(id, channel);
         }
 
@@ -881,6 +882,9 @@ where
 
     async fn handle_channel_close(&mut self, id: u32) -> Result<()> {
         let mut channel = self.remove_channel(id)?;
+        if channel.server.closed {
+            return Err(Error::ProtocolError("The channel is already closed".to_string()));
+        }
         channel.stderr.close().await;
         channel.stdout.close().await;
         channel.server.closed = true;
@@ -900,6 +904,7 @@ where
             self.stream.send_payload(buffer.as_ref()).await?;
 
             channel.client.closed = true;
+            // do not remove, because we need to wait for the channel to be dropped or called close() by user
             self.channels.insert(id, channel);
         }
         Ok(())
@@ -1267,7 +1272,7 @@ where
                         break Err(Error::ChannelClosed);
                     }
                     Message::ChannelEof(recipient) if recipient == client_id => {
-                        break Err(Error::ChannelEof);
+                        break Err(Error::ChannelEOF);
                     }
                     Message::ChannelStdoutData { recipient, data } if recipient == client_id => {
                         let mut data = Buffer::from_vec(data);
@@ -1283,7 +1288,7 @@ where
                             .ok_or(Error::invalid_format("Invalid ssh packet"))?;
 
                         if value != SSH_FXP_VERSION {
-                            return Err(Error::ProtocolError);
+                            return Err(Error::ProtocolError("Unable to receive SFtp version".to_string()));
                         }
 
                         let version = data

@@ -229,7 +229,7 @@ pub(crate) async fn method_exchange(
     let reply = stream.recv_packet().await?;
 
     if reply.payload.is_empty() || reply.payload[0] != SSH_MSG_KEXINIT {
-        return Err(Error::ProtocolError);
+        return Err(Error::ProtocolError("Failed to receive kex msg".to_string()));
     }
 
     let parser = || {
@@ -530,7 +530,7 @@ pub(crate) async fn new_keys(stream: &mut dyn Stream) -> Result<()> {
     stream.send_new_keys().await?;
     let packet = stream.recv_packet().await?;
     if packet.payload[0] != SSH_MSG_NEWKEYS {
-        Err(Error::ProtocolError)
+        Err(Error::ProtocolError("Failed to receive new keys".to_string()))
     } else {
         Ok(())
     }

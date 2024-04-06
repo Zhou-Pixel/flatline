@@ -7,7 +7,6 @@ use num_enum::TryFromPrimitive;
 
 use crate::channel::Channel;
 use crate::error::Result;
-use crate::ssh::common::PAYLOAD_MAXIMUM_SIZE;
 use crate::{
     error::Error,
     ssh::{buffer::Buffer, common::code::*},
@@ -483,8 +482,8 @@ impl Status {
 
     fn no_ok_and_eof<T>(&self, msg: String) -> Result<T> {
         match self {
-            Status::OK => Err(Error::ProtocolError),
-            Status::EOF => Err(Error::ProtocolError),
+            Status::OK => Err(Error::ProtocolError("Unexpected Ok status received".to_string())),
+            Status::EOF => Err(Error::ProtocolError("Unexpected EOF status received".to_string())),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
             Status::FAILURE => Err(Error::SFtpFailure(msg)),
@@ -498,7 +497,7 @@ impl Status {
     fn no_eof<T: Default>(&self, msg: String) -> Result<T> {
         match self {
             Status::OK => Ok(Default::default()),
-            Status::EOF => Err(Error::ProtocolError),
+            Status::EOF => Err(Error::ProtocolError("Unexpected EOF status received".to_string())),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
             Status::FAILURE => Err(Error::SFtpFailure(msg)),
@@ -511,7 +510,7 @@ impl Status {
 
     fn no_ok<T: Default>(&self, msg: String) -> Result<T> {
         match self {
-            Status::OK => Err(Error::ProtocolError),
+            Status::OK => Err(Error::ProtocolError("Unexpected Ok status received".to_string())),
             Status::EOF => Ok(Default::default()),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
@@ -603,12 +602,8 @@ impl SFtp {
         buffer.put_one(file.handle);
 
         self.send(SSH_FXP_CLOSE, buffer.as_ref()).await?;
-        let packet = self.wait_for_packet(request_id).await?;
 
-        match packet.msg {
-            Message::Status { status, msg, .. } => status.to_result(msg),
-            _ => Err(Error::ProtocolError),
-        }
+        self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn read_file(&mut self, file: &mut File, max: u32) -> Result<Vec<u8>> {
@@ -633,8 +628,8 @@ impl SFtp {
                 file.pos += data.len() as u64;
                 Ok(data)
             }
-            Message::Status { status, msg, .. } => status.to_result(msg),
-            _ => Err(Error::ProtocolError),
+            Message::Status { status, msg, .. } => status.no_ok(msg),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -685,25 +680,23 @@ impl SFtp {
 
 
 
-        let packet = self.wait_for_packet(request_id).await?;
-
-        let res = match packet.msg {
-            Message::Status { status, msg, .. } => status.no_eof(msg),
-            _ => Err(Error::ProtocolError),
-        };
+        let res = self.wait_for_status(request_id, Status::no_eof).await;
         if res.is_ok() {
             file.pos += data.len() as u64;
         }
         res
     }
 
-    async fn wait_for_status(&mut self, id: u32) -> Result<()> {
+    async fn wait_for_status<T, B>(&mut self, id: u32, f: T) -> Result<B> 
+    where
+        T: FnOnce(&Status, String) -> Result<B>
+    {
         let packet = self.wait_for_packet(id).await?;
 
         match packet.msg {
             // Message::Status { status, .. } if status == Status::OK => Ok(()),
-            Message::Status { status, msg, .. } => status.to_result(msg),
-            _ => Err(Error::ProtocolError),
+            Message::Status { status, msg, .. } => f(&status, msg),
+            _ => Err(Error::ProtocolError("Unknown msg received".to_string())),
         }
     }
 
@@ -720,7 +713,7 @@ impl SFtp {
         buffer.put_u32(permissions.bits());
 
         self.send(SSH_FXP_MKDIR, buffer.as_ref()).await?;
-        self.wait_for_status(request_id).await
+        self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn rmdir(&mut self, path: &str) -> Result<()> {
@@ -732,7 +725,7 @@ impl SFtp {
 
         self.send(SSH_FXP_RMDIR, buffer.as_ref()).await?;
 
-        self.wait_for_status(request_id).await
+        self.wait_for_status(request_id, Status::no_ok).await
     }
 
     pub async fn open_dir(&mut self, path: &str) -> Result<Dir> {
@@ -750,7 +743,7 @@ impl SFtp {
             Message::FileHandle(handle) => Ok(Dir::new(handle)),
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
 
-            _ => Err(Error::ProtocolError),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -763,12 +756,7 @@ impl SFtp {
         buffer.put_one(dir.handle);
 
         self.send(SSH_FXP_CLOSE, buffer.as_ref()).await?;
-        let packet = self.wait_for_packet(request_id).await?;
-
-        match packet.msg {
-            Message::Status { status, msg, .. } => status.no_eof(msg),
-            _ => Err(Error::ProtocolError),
-        }
+        self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn read_dir(&mut self, dir: &Dir) -> Result<Vec<FileInfo>> {
@@ -785,7 +773,7 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok(msg),
             Message::Name(infos) => Ok(infos),
-            _ => Err(Error::ProtocolError),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -803,7 +791,7 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::ProtocolError),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -821,7 +809,7 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::ProtocolError),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -839,7 +827,7 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::ProtocolError),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -858,12 +846,7 @@ impl SFtp {
         self.send(SSH_FXP_SETSTAT, buffer.as_ref()).await?;
 
 
-        let packet = self.wait_for_packet(request_id).await?;
-
-        match packet.msg {
-            Message::Status { status, msg, .. } => status.no_eof(msg),
-            _ => Err(Error::ProtocolError),
-        }
+        self.wait_for_status(request_id, Status::no_eof).await
         
     }
 
@@ -881,12 +864,7 @@ impl SFtp {
         self.send(SSH_FXP_FSETSTAT, buffer.as_ref()).await?;
 
 
-        let packet = self.wait_for_packet(request_id).await?;
-
-        match packet.msg {
-            Message::Status { status, msg, .. } => status.no_eof(msg),
-            _ => Err(Error::ProtocolError),
-        }
+        self.wait_for_status(request_id, Status::no_eof).await
         
     }
 
@@ -904,7 +882,7 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Name(mut infos) if infos.len() == 1 => Ok(infos.remove(0)),
-            _ => Err(Error::ProtocolError),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
 
     }
@@ -918,11 +896,8 @@ impl SFtp {
         buffer.put_one(targetpath);
 
         self.send(SSH_FXP_SYMLINK, buffer.as_ref()).await?;
-        let packet = self.wait_for_packet(request_id).await?;
-        match packet.msg {
-            Message::Status { status, msg, .. } => status.no_eof(msg),
-            _ => Err(Error::ProtocolError),
-        }
+
+        self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn real_path(&mut self, path: &str) -> Result<String> {
@@ -938,7 +913,7 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Name(infos) if infos.len() == 1 => Ok(infos[0].filename.clone()),
-            _ => Err(Error::ProtocolError),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -951,7 +926,7 @@ impl SFtp {
         buffer.put_one(new);
 
         self.send(SSH_FXP_RENAME, buffer.as_ref()).await?;
-        self.wait_for_status(request_id).await
+        self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn remove_file(&mut self, file: &str) -> Result<()> {
@@ -963,7 +938,7 @@ impl SFtp {
 
         self.send(SSH_FXP_REMOVE, buffer.as_ref()).await?;
 
-        self.wait_for_status(request_id).await
+        self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn open_file(
@@ -996,7 +971,7 @@ impl SFtp {
             Message::FileHandle(handle) => Ok(File::new(handle)),
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
 
-            _ => Err(Error::ProtocolError),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 

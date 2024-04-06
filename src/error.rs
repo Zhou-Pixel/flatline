@@ -29,8 +29,8 @@ pub enum Error {
     #[error("The peer does not support ssh2")]
     Ssh2Unsupport,
 
-    #[error("Unexpect msg from server")]
-    ProtocolError,
+    #[error("Protocol error: {0}")]
+    ProtocolError(String),
 
     #[error("Algorithm negotiation failed")]
     NegotiationFailed,
@@ -57,7 +57,7 @@ pub enum Error {
     ChannelClosed,
 
     #[error("Channel end of file")]
-    ChannelEof,
+    ChannelEOF,
 
     #[error("Failed to verify hostkey")]
     HostKeyVerifyFailed,

@@ -180,7 +180,7 @@ impl<'a> KeyExChange for DiffieHellmanKeyExchange<'a> {
         // let code = ReadBytesExt::read_u8(&mut payload)?;
         let code = payload.take_u8().unwrap();
         if code != SSH_MSG_KEXDH_REPLY {
-            return Err(Error::ProtocolError);
+            return Err(Error::ProtocolError("Failed to receive kexdh reply".to_string()));
         }
 
         // let hostkey_parser = |data: Vec<u8>| {
@@ -653,7 +653,7 @@ impl KeyExChange for DiffieHellmanKeyExchangeX {
             .ok_or(Error::invalid_format("unable to parse msg"))?;
 
         if code != SSH_MSG_KEX_DH_GEX_GROUP {
-            return Err(Error::ProtocolError);
+            return Err(Error::ProtocolError("Failed tos receive dh gex group msg".to_string()));
         }
 
         let hashpg = payload.clone().into_vec();
@@ -720,7 +720,7 @@ impl KeyExChange for DiffieHellmanKeyExchangeX {
         // let code = ReadBytesExt::read_u8(&mut payload)?;
         let code = payload.take_u8().unwrap();
         if code != SSH_MSG_KEX_DH_GEX_REPLY {
-            return Err(Error::ProtocolError);
+            return Err(Error::ProtocolError("Failed to receive dh gex reply".to_string()));
         }
 
         // let hostkey_parser = |data: Vec<u8>| {
@@ -937,7 +937,7 @@ impl KeyExChange for ECDHKexExchange {
             .ok_or(Error::invalid_format("invalid packet format"))?;
 
         if code != SSH2_MSG_KEX_ECDH_REPLY {
-            return Err(Error::ProtocolError);
+            return Err(Error::ProtocolError("Failed to receive kex ecdh reply".to_string()));
         }
 
         // hostkey
@@ -1050,7 +1050,7 @@ impl KeyExChange for Curve25519 {
         let mut payload = Buffer::from_vec(packet.payload);
 
         if payload.take_u8() != Some(SSH2_MSG_KEX_ECDH_REPLY) {
-            return Err(Error::ProtocolError);
+            return Err(Error::ProtocolError("Failed to receive ecdh reply".to_string()));
         }
 
         // hostkey
