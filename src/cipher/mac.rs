@@ -1,3 +1,4 @@
+use super::*;
 use crate::error::{Error, Result};
 use derive_new::new;
 use indexmap::IndexMap;
@@ -6,8 +7,6 @@ use openssl::{
     md_ctx::MdCtx,
     pkey::{PKey, Private},
 };
-use super::*;
-
 
 algo_list!(
     all,
@@ -107,11 +106,41 @@ algo_list!(
         20,
         true,
         Md::ripemd160(),
-    ),   
+    ),
 );
 
 
+pub fn none() -> Boxtory<dyn Mac + Send> {
+    create_boxtory!(Never {})
+}
 
+struct Never;
+
+impl Mac for Never {
+    fn encrypt_then_mac(&self) -> bool {
+        false
+    }
+
+    fn key_len(&self) -> usize {
+        0
+    }
+
+    fn mac_len(&self) -> usize {
+        0
+    }
+
+    fn initialize(&mut self, _: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    fn update(&mut self, _: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    fn finalize(&mut self) -> Result<Vec<u8>> {
+        Ok(vec![])
+    }
+}
 
 pub trait Mac {
     fn encrypt_then_mac(&self) -> bool;
@@ -160,14 +189,16 @@ impl Mac for HMac {
 
         let mut ctx = MdCtx::new()?;
         ctx.digest_sign_init(Some(self.digest), &pkey)?;
-        
+
         self.ctx = Some(ctx);
         self.key = Some(pkey);
         Ok(())
     }
 
     fn update(&mut self, data: &[u8]) -> Result<()> {
-        self.get_ctx_mut()?.digest_sign_update(data).map_err(|e| e.into())
+        self.get_ctx_mut()?
+            .digest_sign_update(data)
+            .map_err(|e| e.into())
     }
 
     fn finalize(&mut self) -> Result<Vec<u8>> {
@@ -186,8 +217,4 @@ impl Mac for HMac {
         }
         Ok(buf)
     }
-
-
 }
-
-

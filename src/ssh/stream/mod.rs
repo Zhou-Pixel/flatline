@@ -77,7 +77,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> BufferStream<T> {
         if size == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "connection closed",
+                "Connection closed",
             ));
         }
         Ok(size)
@@ -584,7 +584,7 @@ where
 
         let payload_len = payload.len();
         if payload_len > PAYLOAD_MAXIMUM_SIZE {
-            return Err(Error::ub("payload is too long"));
+            return Err(Error::ub(format!("payload is too long: {}", payload_len)));
         }
         // ( 4 + 1 + y + x) % 8 = 0
         // x = 8 - (4 + 1 + y + x) % 8

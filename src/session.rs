@@ -14,7 +14,7 @@ use crate::error::Result;
 
 use crate::msg::DisconnectReson;
 use crate::msg::ExitStatus;
-use crate::sftp::Sftp;
+use crate::sftp::SFtp;
 use crate::ssh::buffer::Buffer;
 use crate::ssh::common::code::*;
 use crate::ssh::common::SFTP_VERSION;
@@ -34,7 +34,6 @@ macro_rules! channel_loop {
             loop {
                 match $sel.recv_msg().await? {
                     Message::ChannelClose(recipient) if recipient == $id => {
-                        println!("channel close: {}", recipient);
                         $sel.handle_channel_close(recipient).await?;
                         return Err(Error::ChannelClosed);
                     }
@@ -104,7 +103,7 @@ impl Session {
         res
     }
 
-    pub async fn sftp_open(&mut self) -> Result<Sftp> {
+    pub async fn sftp_open(&mut self) -> Result<SFtp> {
         let (sender, recver) = async_channel::bounded(1);
         self.send_request(Request::SFtpOpen {
             session: (*self.sender).clone(),
@@ -276,10 +275,6 @@ pub struct SessionInner<T: AsyncRead + AsyncWrite + Unpin + Send> {
     channels: HashMap<u32, ChannelInner>,
 }
 
-fn parse_error<T>(opt: Option<T>) -> Result<T> {
-    opt.ok_or(Error::invalid_format("unable to parse a ssh packet"))
-}
-
 impl<T> SessionInner<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -290,7 +285,7 @@ where
                 tokio::select! {
                     request = self.recver.recv() => {
                         let Ok(request) = request else {
-                            self.session_disconnect(DisconnectReson::BY_APPLICATION, "").await?;
+                            self.session_disconnect(DisconnectReson::BY_APPLICATION, "exit").await?;
                             break;
                         };
                         if self.handle_request(request).await {
@@ -299,7 +294,9 @@ where
                     }
                     packet = self.stream.recv_packet() => {
                         let msg = Message::parse(packet?.payload).map_err(Error::invalid_format)?;
-                        self.handle_msg(msg).await?;
+                        if self.handle_msg(msg).await? {
+                            break;
+                        }
                     }
                 }
             }
@@ -312,6 +309,7 @@ where
         buffer.put_u8(SSH_MSG_DISCONNECT);
         buffer.put_u32(reson.0);
         buffer.put_one(desc);
+        buffer.put_u32(0);
         self.stream.send_payload(buffer.as_ref()).await
     }
 
@@ -350,7 +348,7 @@ where
         Message::parse(packet.payload).map_err(Error::invalid_format)
     }
 
-    async fn handle_msg(&mut self, msg: Message) -> Result<()> {
+    async fn handle_msg(&mut self, msg: Message) -> Result<bool> {
         // println!("handle message: {:?}", msg);
         match msg {
             Message::ChannelStdoutData { recipient, data } => {
@@ -384,10 +382,24 @@ where
                 let channel = self.get_server_channel(recipient)?;
                 channel.exit_status = Some(ExitStatus::new_normal(status));
             }
+            Message::Disconnect { .. } => {
+                return Ok(true);
+            }
+            Message::Ping(data) => {
+                self.session_pong(data).await?;
+            }
             _ => {}
         }
 
-        Ok(())
+        Ok(false)
+    }
+
+    async fn session_pong(&mut self, data: Vec<u8>) -> Result<()> {
+        let mut buffer = Buffer::new();
+        buffer.put_u8(SSH2_MSG_PONG);
+        buffer.put_one(data);
+
+        self.stream.send_payload(buffer.as_ref()).await
     }
 
     async fn set_channel_eof(&mut self, id: u32, eof: bool) -> bool {
@@ -565,6 +577,7 @@ where
 
         self.stream.send_payload(buffer.as_ref()).await
     }
+
     async fn channel_set_env(&mut self, id: u32, name: &str, value: &[u8]) -> Result<()> {
         let mut buffer = Buffer::new();
 
@@ -607,7 +620,7 @@ where
         let channel = self
             .channels
             .get_mut(&id)
-            .ok_or(Error::ub("failed to find channel"))?;
+            .ok_or(Error::ub("Failed to find channel"))?;
 
         if let Some(ref exit_status) = channel.exit_status {
             return Ok(exit_status.clone());
@@ -637,7 +650,7 @@ where
         let channel = self
             .channels
             .get_mut(&id)
-            .ok_or(Error::ub("failed to find channel"))?;
+            .ok_or(Error::ub("Failed to find channel"))?;
 
         channel.exit_status = Some(status.clone());
 
@@ -683,7 +696,7 @@ where
         let channel = self
             .channels
             .get_mut(&id)
-            .ok_or(Error::ub("failed to find channel"))?;
+            .ok_or(Error::ub("Failed to find channel"))?;
 
         if channel.client.closed || channel.server.closed {
             return Err(Error::ChannelClosed);
@@ -750,7 +763,7 @@ where
         let channel = self
             .channels
             .get_mut(&id)
-            .ok_or(Error::ub("failed to find channel"))?;
+            .ok_or(Error::ub("Failed to find channel"))?;
 
         if channel.client.closed {
             return Ok(());
@@ -771,8 +784,8 @@ where
 
     async fn handle_channel_close(&mut self, id: u32) -> Result<()> {
         let mut channel = self.remove_channel(id)?;
-        channel.stderr.close();
-        channel.stdout.close();
+        channel.stderr.close().await;
+        channel.stdout.close().await;
         channel.server.closed = true;
 
         if !channel.client.closed {
@@ -798,20 +811,20 @@ where
     fn remove_channel(&mut self, id: u32) -> Result<ChannelInner> {
         self.channels
             .remove(&id)
-            .ok_or(Error::ub("failed to find channel"))
+            .ok_or(Error::ub("Failed to find channel"))
     }
 
     fn get_server_channel_id(&mut self, id: u32) -> Result<u32> {
         self.channels
             .get(&id)
             .map(|v| v.server.id)
-            .ok_or(Error::ub("failed to find channel"))
+            .ok_or(Error::ub("Failed to find channel"))
     }
 
     fn get_server_channel(&mut self, id: u32) -> Result<&mut ChannelInner> {
         self.channels
             .get_mut(&id)
-            .ok_or(Error::ub("failed to find channel"))
+            .ok_or(Error::ub("Failed to find channel"))
     }
 
     async fn channel_exec(&mut self, id: u32, cmd: &str) -> Result<()> {
@@ -1089,7 +1102,7 @@ where
         initial: u32,
         maximum: u32,
         session: Sender<Request>,
-    ) -> Result<Sftp> {
+    ) -> Result<SFtp> {
         let (channel, inner) = self
             .channel_open_normal(initial, maximum, session.clone())
             .await?;
@@ -1167,17 +1180,23 @@ where
                     Message::ChannelStdoutData { recipient, data } if recipient == client_id => {
                         let mut data = Buffer::from_vec(data);
 
-                        let (_, data) = parse_error(data.take_one())?;
+                        let (_, data) = data
+                            .take_one()
+                            .ok_or(Error::invalid_format("Invalid ssh packet"))?;
 
                         let mut data = Buffer::from_vec(data);
 
-                        let value = parse_error(data.take_u8())?;
+                        let value = data
+                            .take_u8()
+                            .ok_or(Error::invalid_format("Invalid ssh packet"))?;
 
                         if value != SSH_FXP_VERSION {
                             return Err(Error::ProtocolError);
                         }
 
-                        let version = parse_error(data.take_u32())?;
+                        let version = data
+                            .take_u32()
+                            .ok_or(Error::invalid_format("Invalid ssh packet"))?;
 
                         let mut ext = || {
                             let Some((_, key)) = data.take_one() else {
@@ -1188,7 +1207,7 @@ where
 
                             let (_, value) = data
                                 .take_one()
-                                .ok_or(Error::invalid_format("could't parse value"))?;
+                                .ok_or(Error::invalid_format("Failed to parse value"))?;
 
                             Result::Ok(Some((key, value)))
                         };
@@ -1198,7 +1217,7 @@ where
                             extension.insert(k, v);
                         }
 
-                        break Ok(Sftp::new(channel, version, extension));
+                        break Ok(SFtp::new(channel, version, extension));
                     }
                     msg => {
                         self.handle_msg(msg).await?;

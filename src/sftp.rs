@@ -41,7 +41,7 @@ bitflags! {
 }
 
 #[derive(new)]
-pub struct Sftp {
+pub struct SFtp {
     // session: Sender<Request>,
     // id: u32,
     channel: Channel,
@@ -564,7 +564,7 @@ enum Message {
 //     }
 // }
 
-impl Sftp {
+impl SFtp {
 
     pub fn extend(&self, key: &str) -> Option<&[u8]> {
         self.ext.get(key).map(|v| v.as_ref())
@@ -620,13 +620,8 @@ impl Sftp {
 
         buffer.put_u32(max);
 
-        let mut packet = Buffer::new();
+        self.send(SSH_FXP_READ, buffer.as_ref()).await?;
 
-        packet.put_u32((buffer.len() + 1) as u32);
-        packet.put_u8(SSH_FXP_READ);
-        packet.put_bytes(buffer);
-
-        self.write_all(packet.as_ref()).await?;
 
         let packet = self.recv().await?;
 
@@ -653,7 +648,8 @@ impl Sftp {
     pub async fn write_file(&mut self, file: &mut File, data: &[u8]) -> Result<()> {
 
 
-        let max = PAYLOAD_MAXIMUM_SIZE - 1 - 4 - 4 - file.handle.len() - 8 - 4 - 5;
+        let max = PAYLOAD_MAXIMUM_SIZE - 4 - 1 - 4 - 4 - file.handle.len() - 8 - 4 - 1 - 4 - 4 - 1000;
+        // let max = 1024;
         for i in (0..data.len()).step_by(max) {
 
 
@@ -682,14 +678,20 @@ impl Sftp {
         buffer.put_u64(file.pos);
         buffer.put_one(data);
 
-        let mut packet = Buffer::new();
-        packet.put_u32((buffer.len() + 1) as u32);
-        packet.put_u8(SSH_FXP_WRITE);
-        packet.put_bytes(buffer);
+        self.send(SSH_FXP_WRITE, buffer.as_ref()).await?;
 
-        self.write_all(packet.as_ref()).await?;
 
-        self.wait_for_status(request_id).await
+
+        let packet = self.wait_for_packet(request_id).await?;
+
+        let res = match packet.msg {
+            Message::Status { status, msg, .. } => status.no_eof(msg),
+            _ => Err(Error::ProtocolError),
+        };
+        if res.is_ok() {
+            file.pos += data.len() as u64;
+        }
+        res
     }
 
     async fn wait_for_status(&mut self, id: u32) -> Result<()> {
@@ -761,7 +763,7 @@ impl Sftp {
         let packet = self.wait_for_packet(request_id).await?;
 
         match packet.msg {
-            Message::Status { status, msg, .. } => status.to_result(msg),
+            Message::Status { status, msg, .. } => status.no_eof(msg),
             _ => Err(Error::ProtocolError),
         }
     }

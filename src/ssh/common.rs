@@ -48,6 +48,9 @@ pub mod code {
     pub const SSH_MSG_CHANNEL_SUCCESS: u8 = 99;
     pub const SSH_MSG_CHANNEL_FAILURE: u8 = 100;
 
+    pub const SSH2_MSG_PING: u8 = 192;
+    pub const SSH2_MSG_PONG: u8 = 193;
+
     // pub const SSH_MSG_KEX_DH_GEX_REQUEST_OLD: u8 =  30;
     // pub const SSH_MSG_KEX_DH_GEX_REQUEST: u8 =      34;
     // pub const SSH_MSG_KEX_DH_GEX_GROUP: u8 =        31;
@@ -165,7 +168,6 @@ pub const KEX_STRICT_SERVER: &str = "kex-strict-s-v00@openssh.com";
 pub const EXT_INFO_SERVER: &str = "ext-info-s";
 
 pub const SFTP_VERSION: u32 = 3;
-
 
 // https://datatracker.ietf.org/doc/html/rfc4253#section-6.1
 pub const PAYLOAD_MAXIMUM_SIZE: usize = 32768;

@@ -2,7 +2,7 @@ use async_channel::Sender;
 use derive_new::new;
 use super::error::Result;
 use crate::ssh::buffer::Buffer;
-use super::sftp::Sftp;
+use super::sftp::SFtp;
 use super::channel::Channel;
 use super::ssh::common::code::*;
 
@@ -80,7 +80,7 @@ pub(crate) enum Request {
     },
     SFtpOpen {
         session: Sender<Request>,
-        sender: Sender<Result<Sftp>>,
+        sender: Sender<Result<SFtp>>,
     },
 }
 
@@ -215,6 +215,7 @@ pub(crate) enum Message {
         tag: String,
     },
     Ignore(Vec<u8>),
+    Ping(Vec<u8>)
 }
 
 #[derive(Debug, Clone, new)]
@@ -434,6 +435,7 @@ impl Message {
                     })
                 }
                 SSH_MSG_IGNORE => Some(Self::Ignore(buffer.take_one()?.1)),
+                SSH2_MSG_PING => Some(Self::Ping(buffer.take_one()?.1)),
                 _ => {
                     detail = format!("unknown code: {code} datalen: {}", buffer.len());
                     None

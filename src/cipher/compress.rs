@@ -4,8 +4,6 @@ use flate2::{Compress, Compression, Decompress, Status};
 use indexmap::IndexMap;
 use std::mem;
 
-
-
 algo_list!(
     encode_all,
     new_encode_all,
@@ -102,16 +100,27 @@ impl Encode for ZEncoder {
     }
 
     fn update(&mut self, data: &[u8]) -> Result<()> {
-        let mut tmp = Vec::with_capacity(data.len());
-        let status = self
-            .encoder
-            .compress_vec(data, &mut tmp, flate2::FlushCompress::Partial);
-        match status {
-            Ok(Status::Ok) => {
-                self.buf.extend(tmp);
-                Ok(())
-            }
-            _ => Err(Error::CompressFailed),
+        let before = self.encoder.total_in() as usize;
+        let data_len = data.len();
+        let mut pos = 0;
+        loop {
+            let cap = ((data_len - pos) / 1024 + 1) * 1024;
+            let mut tmp = Vec::with_capacity(cap);
+            let status =
+                self.encoder
+                    .compress_vec(&data[pos..], &mut tmp, flate2::FlushCompress::Partial);
+            return match status {
+                Ok(Status::Ok) => {
+                    self.buf.extend(&tmp);
+                    let after = self.encoder.total_in() as usize;
+                    pos = after - before;
+                    if pos < data_len || tmp.len() == cap {
+                        continue;
+                    }
+                    Ok(())
+                }
+                _ => Err(Error::CompressFailed),
+            };
         }
     }
 
@@ -142,36 +151,61 @@ impl Decode for ZDecoder {
     }
 
     fn update(&mut self, data: &[u8]) -> Result<()> {
-        let mut len = (data.len() / 1024 + 1) * 1024;
-        let out_before = self.decoder.total_out() as usize;
-        let in_before = self.decoder.total_in() as usize;
-        let mut tmp = vec![0; len];
+        let before = self.decoder.total_in();
+        let mut pos = 0;
         loop {
-            // let status = self
-            //     .decoder
-            //     .decompress_vec(data, &mut tmp, flate2::FlushDecompress::None);
-
-            let input_index = self.decoder.total_in() as usize - in_before;
-            let output_index = self.decoder.total_out() as usize - out_before;
-            let status = self.decoder.decompress(
-                &data[input_index..],
-                &mut tmp[output_index..],
-                flate2::FlushDecompress::Sync,
-            );
-
+            let cap = 1024 * 4;
+            let mut tmp = Vec::with_capacity(cap);
+            let status =
+                self.decoder
+                    .decompress_vec(&data[pos..], &mut tmp, flate2::FlushDecompress::Sync);
+            pos = (self.decoder.total_in() - before) as usize;
             return match status {
                 Ok(Status::Ok) => {
-                    len *= 2;
-                    tmp.resize(len, 0);
+                    self.buf.extend(tmp);
                     continue;
                 }
                 Ok(_) => {
                     self.buf.extend(tmp);
+                    if pos < data.len() {
+                        continue;
+                    }
                     Ok(())
                 }
                 _ => Err(Error::CompressFailed),
             };
         }
+
+        // let mut len = (data.len() / 1024 + 1) * 1024;
+        // let out_before = self.decoder.total_out() as usize;
+        // let in_before = self.decoder.total_in() as usize;
+        // let mut tmp = vec![0; len];
+        // loop {
+        //     // let status = self
+        //     //     .decoder
+        //     //     .decompress_vec(data, &mut tmp, flate2::FlushDecompress::None);
+
+        //     let input_index = self.decoder.total_in() as usize - in_before;
+        //     let output_index = self.decoder.total_out() as usize - out_before;
+        //     let status = self.decoder.decompress(
+        //         &data[input_index..],
+        //         &mut tmp[output_index..],
+        //         flate2::FlushDecompress::Sync,
+        //     );
+
+        //     return match status {
+        //         Ok(Status::Ok) => {
+        //             len *= 2;
+        //             tmp.resize(len, 0);
+        //             continue;
+        //         }
+        //         Ok(_) => {
+        //             self.buf.extend(tmp);
+        //             Ok(())
+        //         }
+        //         _ => Err(Error::CompressFailed),
+        //     };
+        // }
     }
 
     fn finalize(&mut self) -> Result<Vec<u8>> {

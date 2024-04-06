@@ -1,6 +1,6 @@
 use std::{mem::take, sync::Arc};
 use super::error::{Error, Result};
-use async_channel::{Receiver, Sender, TryRecvError};
+use async_channel::{Receiver, Sender};
 use bytes::BytesMut;
 use derive_new::new;
 use tokio::sync::RwLock;

@@ -3,7 +3,12 @@ use indexmap::IndexMap;
 use openssl::rand::rand_bytes;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-
+use super::cipher::hash::Hash;
+use super::cipher::kex::Summary as DHSumary;
+use super::cipher::Boxtory;
+use super::error::{Error, Result};
+use super::ssh::common::*;
+use super::ssh::stream::{BufferStream, Stream};
 use crate::cipher::compress::{self, Decode, Encode};
 use crate::cipher::crypt::{self, Decrypt, Encrypt};
 use crate::cipher::kex::{self, KeyExChange};
@@ -12,15 +17,9 @@ use crate::cipher::sign::{self, Verify};
 use crate::handshake::code::*;
 use crate::project;
 use crate::ssh::buffer::Buffer;
-use super::cipher::hash::Hash;
-use super::cipher::kex::Summary as DHSumary;
-use super::error::{Error, Result};
-use super::ssh::common::*;
-use super::ssh::stream::{BufferStream, Stream};
-use super::cipher::Boxtory;
 
 pub struct Config {
-    pub(crate) banner: String, // 
+    pub(crate) banner: String, //
     pub key_exchange: IndexMap<String, Boxtory<dyn KeyExChange + Send>>,
     pub hostkey: IndexMap<String, Boxtory<dyn Verify + Send>>,
     pub crypt_server_to_client: IndexMap<String, Boxtory<dyn Decrypt + Send>>,
@@ -64,8 +63,10 @@ impl Config {
     pub fn disable_compress(&mut self) {
         self.compress_client_to_server.clear();
         self.compress_server_to_client.clear();
-        self.compress_client_to_server.insert("none".to_string(), compress::none_encode());
-        self.compress_server_to_client.insert("none".to_string(), compress::none_decode());
+        self.compress_client_to_server
+            .insert("none".to_string(), compress::none_encode());
+        self.compress_server_to_client
+            .insert("none".to_string(), compress::none_decode());
     }
 }
 
@@ -148,21 +149,27 @@ pub(crate) struct MethodExchange {
     // algo: Algorithm,
 }
 
-pub(crate) async fn method_exchange(stream: &mut dyn Stream, config: &Config) -> Result<MethodExchange> {
-
+pub(crate) async fn method_exchange(
+    stream: &mut dyn Stream,
+    config: &Config,
+) -> Result<MethodExchange> {
     let invalid_arg = |str: &str| Err(Error::InvalidArgument(str.to_string()));
     if config.compress_client_to_server.is_empty() {
-        return invalid_arg("compress client to server is empty, 'none' should be provided at least");
+        return invalid_arg(
+            "compress client to server is empty, 'none' should be provided at least",
+        );
     }
 
     if config.compress_server_to_client.is_empty() {
-        return invalid_arg("compress_server_to_client is empty, 'none' should be provided at least");
+        return invalid_arg(
+            "compress_server_to_client is empty, 'none' should be provided at least",
+        );
     }
 
     if config.crypt_client_to_server.is_empty() {
         return invalid_arg("crypt client to server is empty");
     }
-    
+
     if config.crypt_server_to_client.is_empty() {
         return invalid_arg("crypt server to client is empty");
     }
@@ -180,11 +187,8 @@ pub(crate) async fn method_exchange(stream: &mut dyn Stream, config: &Config) ->
     }
 
     if config.key_exchange.is_empty() {
-
         return invalid_arg("key exhange is empty");
     }
-
-
 
     let client_methods = Methods::from_config(config);
 
@@ -221,7 +225,6 @@ pub(crate) async fn method_exchange(stream: &mut dyn Stream, config: &Config) ->
     buffer.put_bytes([0; 4]); // ssh.kex.reserved
 
     stream.send_payload(buffer.as_ref()).await?;
-
 
     let reply = stream.recv_packet().await?;
 
@@ -297,10 +300,9 @@ pub(crate) async fn method_exchange(stream: &mut dyn Stream, config: &Config) ->
 
     let client = Summary::new(buffer.into_vec(), client_methods);
     let server = Summary::new(reply.payload, server_methods);
-    
+
     Ok(MethodExchange::new(client, server))
 }
-
 
 #[derive(new)]
 pub(crate) struct Algorithm {
@@ -314,10 +316,8 @@ pub(crate) struct Algorithm {
     pub client_compress: Box<dyn Encode + Send>,
 }
 
-
 impl Algorithm {
     pub(crate) fn initialize(&mut self, result: &mut DHSumary) -> Result<()> {
-
         let secret_key = Buffer::from_one(&result.secret_key);
 
         let local_iv = calculate(
@@ -382,10 +382,10 @@ impl Algorithm {
         self.server_mac.initialize(&remote_key)?;
 
         Ok(())
-
     }
 }
 
+// todo: ignore mac when cipher has tag
 pub(crate) fn match_method(
     client: &Methods,
     server: &Methods,
@@ -395,8 +395,6 @@ pub(crate) fn match_method(
     let mut hostkey = None;
     let mut server_crypt = None;
     let mut client_crypt = None;
-    let mut server_mac = None;
-    let mut client_mac = None;
     let mut server_compress = None;
     let mut client_compress = None;
     for i in &client.kex {
@@ -427,20 +425,19 @@ pub(crate) fn match_method(
         }
     }
 
-    for i in &client.mac_client_to_server {
-        if server.mac_client_to_server.contains(i) {
-            client_mac = config.mac_client_to_server.get(i);
-            break;
-        }
-    }
+    // for i in &client.mac_client_to_server {
+    //     if server.mac_client_to_server.contains(i) {
+    //         client_mac = config.mac_client_to_server.get(i);
+    //         break;
+    //     }
+    // }
 
-    for i in &client.mac_server_to_client {
-        if server.mac_server_to_client.contains(i) {
-            server_mac = config.mac_server_to_client.get(i);
-            break;
-        }
-    }
-
+    // for i in &client.mac_server_to_client {
+    //     if server.mac_server_to_client.contains(i) {
+    //         server_mac = config.mac_server_to_client.get(i);
+    //         break;
+    //     }
+    // }
 
     for i in &client.com_client_to_server {
         if server.com_client_to_server.contains(i) {
@@ -456,26 +453,8 @@ pub(crate) fn match_method(
         }
     }
 
-    match (
-        kex,
-        hostkey,
-        server_crypt,
-        client_crypt,
-        server_mac,
-        client_mac,
-        server_compress,
-        client_compress,
-    ) {
-        (
-            Some(kex),
-            Some(hostkey),
-            Some(server_crypt),
-            Some(client_crypt),
-            Some(server_mac),
-            Some(client_mac),
-            Some(server_compress),
-            Some(client_compress),
-        ) => Ok(Algorithm::new(
+    /*
+    Ok(Algorithm::new(
             kex.create(),
             hostkey.create(),
             server_crypt.create(),
@@ -484,11 +463,68 @@ pub(crate) fn match_method(
             client_mac.create(),
             server_compress.create(),
             client_compress.create(),
-        )),
+        ))
+     */
+    match (
+        kex,
+        hostkey,
+        server_crypt,
+        client_crypt,
+        server_compress,
+        client_compress,
+    ) {
+        (
+            Some(kex),
+            Some(hostkey),
+            Some(server_crypt),
+            Some(client_crypt),
+            Some(server_compress),
+            Some(client_compress),
+        ) => {
+            let mut server_mac = None;
+            let mut client_mac = None;
+            let server_crypt = server_crypt.create();
+            if server_crypt.has_tag() {
+                server_mac = Some(mac::none().create());
+            } else {
+                for i in &client.mac_server_to_client {
+                    if server.mac_server_to_client.contains(i) {
+                        server_mac = config.mac_server_to_client.get(i).map(|v| v.create());
+                        break;
+                    }
+                }
+            }
+
+            let client_crypt = client_crypt.create();
+
+            if client_crypt.has_tag() {
+                client_mac = Some(mac::none().create());
+            } else {
+                for i in &client.mac_client_to_server {
+                    if server.mac_client_to_server.contains(i) {
+                        client_mac = config.mac_server_to_client.get(i).map(|v| v.create());
+                        break;
+                    }
+                }
+            }
+
+            match (client_mac, server_mac) {
+                (Some(client_mac), Some(server_mac)) => Ok(Algorithm::new(
+                    kex.create(),
+                    hostkey.create(),
+                    server_crypt,
+                    client_crypt,
+                    server_mac,
+                    client_mac,
+                    server_compress.create(),
+                    client_compress.create(),
+                )),
+                _ => Err(Error::NegotiationFailed),
+            }
+        }
         _ => Err(Error::NegotiationFailed),
     }
 }
-
 
 pub(crate) async fn new_keys(stream: &mut dyn Stream) -> Result<()> {
     stream.send_new_keys().await?;
@@ -499,7 +535,6 @@ pub(crate) async fn new_keys(stream: &mut dyn Stream) -> Result<()> {
         Ok(())
     }
 }
-
 
 fn calculate(
     hash: &mut Box<dyn Hash + Send>,
@@ -516,24 +551,19 @@ fn calculate(
     hash.update(&[version])?;
     hash.update(session_id)?;
 
-
     let tmp = hash.finalize()?;
 
     out.extend(tmp);
 
     while out.len() < len {
-
-
         hash.update(key)?;
         hash.update(h)?;
         hash.update(&out)?;
 
         let tmp = hash.finalize()?;
 
-
         out.extend(tmp);
     }
-
 
     out.truncate(len);
 

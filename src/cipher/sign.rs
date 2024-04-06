@@ -16,7 +16,7 @@ algo_list!(
     new_signature_all,
     new_signature_by_name,
     dyn Signature + Send,
-    "ssh-ed25519" => Ed25519::new(None),
+    "ssh-ed25519" => Ed25519::new(),
     "rsa-sha2-256" => Rsa::rsa_sha2_256(),
     "rsa-sha2-512" => Rsa::rsa_sha2_512(),
     "ssh-rsa" => Rsa::ssh_rsa(),
@@ -31,7 +31,7 @@ algo_list!(
     new_verify_all,
     new_verify_by_name,
     dyn Verify + Send,
-    "ssh-ed25519" => Ed25519::new(None),
+    "ssh-ed25519" => Ed25519::new(),
     "rsa-sha2-256" => Rsa::rsa_sha2_256(),
     "rsa-sha2-512" => Rsa::rsa_sha2_512(),
     "ssh-rsa" => Rsa::ssh_rsa(),
@@ -49,6 +49,7 @@ pub trait Signature {
 
 #[derive(new)]
 struct Ed25519 {
+    #[new(default)]
     ctx: Option<MdCtx>,
 }
 
@@ -56,7 +57,7 @@ impl Ed25519 {
     fn get_ctx_mut(&mut self) -> Result<&mut MdCtx> {
         match self.ctx {
             Some(ref mut ctx) => Ok(ctx),
-            None => Err(Error::ub("uninitilize")),
+            None => Err(Error::ub("Uninitilize")),
         }
     }
 }
