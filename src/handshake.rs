@@ -22,8 +22,8 @@ pub struct Config {
     pub(crate) banner: String, //
     pub key_exchange: IndexMap<String, Boxtory<dyn KeyExChange + Send>>,
     pub hostkey: IndexMap<String, Boxtory<dyn Verify + Send>>,
-    pub crypt_server_to_client: IndexMap<String, Boxtory<dyn Decrypt + Send>>,
     pub crypt_client_to_server: IndexMap<String, Boxtory<dyn Encrypt + Send>>,
+    pub crypt_server_to_client: IndexMap<String, Boxtory<dyn Decrypt + Send>>,
     pub mac_client_to_server: IndexMap<String, Boxtory<dyn Mac + Send>>,
     pub mac_server_to_client: IndexMap<String, Boxtory<dyn Mac + Send>>,
     pub compress_client_to_server: IndexMap<String, Boxtory<dyn Encode + Send>>,

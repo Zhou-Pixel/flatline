@@ -456,6 +456,47 @@ impl SFtp {
         Ok(())
     }
 
+    pub async fn write_file_buf(&mut self, file: &mut File, data: &[u8]) -> Result<()> {
+
+
+        let time = std::time::Instant::now();
+        let max = Self::MAX_SFTP_PACKET;
+        let mut requests = vec![];
+        for i in (0..data.len()).step_by(max) {
+
+
+            let left = data.len() - i;
+
+
+            let min = min(left, max);
+
+            let mut buffer = Buffer::new();
+
+            let request_id = self.genarate_request_id();
+    
+            buffer.put_u32(request_id);
+            buffer.put_one(&file.handle);
+            buffer.put_u64(file.pos);
+            buffer.put_one(&data[i..i + min]);
+    
+            self.send(SSH_FXP_WRITE, buffer.as_ref()).await?;
+    
+            requests.push(request_id);
+            file.pos += min as u64;
+    
+    
+
+
+        }
+
+        for i in requests {
+            self.wait_for_status(i, Status::no_eof).await?;
+        }
+
+        println!("time spend: {}", time.elapsed().as_millis());
+        Ok(())
+    }
+
     pub async fn write_file(&mut self, file: &mut File, data: &[u8]) -> Result<()> {
 
 
