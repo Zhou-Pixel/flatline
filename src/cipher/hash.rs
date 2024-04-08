@@ -8,7 +8,7 @@ pub trait Hash {
     fn finalize(&mut self) -> Result<Vec<u8>>;
 }
 
-pub struct MdWrapper {
+pub(crate) struct MdWrapper {
     ctx: MdCtx,
     ctxref: &'static MdRef,
 }

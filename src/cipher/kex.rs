@@ -76,7 +76,7 @@ pub struct Dependency {
 // }
 
 #[derive(new)]
-pub struct DiffieHellman {
+struct DiffieHellman {
     p: BigNum,
     g: BigNum,
     group_order: i32,
@@ -888,7 +888,7 @@ impl KeyExChange for DiffieHellmanKeyExchangeX {
 }
 
 #[derive(new)]
-pub struct ECDHKexExchange {
+struct ECDHKexExchange {
     nid: Nid,
     hash: &'static MdRef,
 }

@@ -52,155 +52,32 @@ pub struct SFtp {
     ext: HashMap<String, Vec<u8>>,
 }
 
-#[derive(new)]
 pub struct File {
-    // sftp: &'a mut Sftp,
     handle: Vec<u8>,
-    #[new(value = "0")]
     pos: u64,
-    // #[new(value = "false")]
-    // closed: bool,
 }
 
-#[derive(new)]
+impl File {
+    fn new(handle: Vec<u8>) -> Self {
+        Self {
+            handle,
+            pos: 0
+        }
+    }
+}
+
 pub struct Dir {
     handle: Vec<u8>,
 }
 
-// impl<'a> Drop for File<'a> {
-//     fn drop(&mut self) {
-//         if self.closed {
-//             return;
-//         }
-//         let _ = tokio::runtime::Handle::current().block_on(async {
-//             let request_id = self.sftp.genarate_request_id();
+impl Dir {
+    fn new(handle: Vec<u8>) -> Self {
+        Self {
+            handle
+        }
+    }
+}
 
-//             let mut buffer = Buffer::new();
-
-//             buffer.put_u32(request_id);
-//             buffer.put_one(&self.handle);
-
-//             let mut packet = Buffer::new();
-
-//             packet.put_u32((buffer.len() + 1) as u32);
-//             packet.put_u8(SSH_FXP_CLOSE);
-//             packet.put_bytes(buffer);
-
-//             self.sftp.write_all(packet.as_ref()).await?;
-
-//             let packet = self.sftp.wait_for_packet(request_id).await?;
-
-//             match packet.msg {
-//                 Message::Status { status, .. } if status == SSH_FX_OK => Ok(()),
-//                 Message::Status { status, msg, .. } => Err(Error::SFtpRequestFailed(status, msg)),
-//                 _ => Err(Error::UnexpectMsg),
-//             }
-//         });
-//     }
-// }
-
-// impl<'a> File<'a> {
-//     pub async fn close(mut self) -> Result<()> {
-//         self.closed = true;
-//         let request_id = self.sftp.genarate_request_id();
-
-//         let mut buffer = Buffer::new();
-
-//         buffer.put_u32(request_id);
-//         buffer.put_one(&self.handle);
-
-//         let mut packet = Buffer::new();
-
-//         packet.put_u32((buffer.len() + 1) as u32);
-//         packet.put_u8(SSH_FXP_CLOSE);
-//         packet.put_bytes(buffer);
-
-//         self.sftp.write_all(packet.as_ref()).await?;
-
-//         let packet = self.sftp.wait_for_packet(request_id).await?;
-
-//         match packet.msg {
-//             Message::Status { status, .. } if status == SSH_FX_OK => Ok(()),
-//             Message::Status { status, msg, .. } => Err(Error::SFtpRequestFailed(status, msg)),
-//             _ => Err(Error::UnexpectMsg),
-//         }
-//     }
-
-//     pub async fn read(&mut self, max: u32) -> Result<Vec<u8>> {
-//         let request_id = self.sftp.genarate_request_id();
-
-//         let mut buffer = Buffer::new();
-
-//         buffer.put_u32(request_id);
-
-//         buffer.put_one(&self.handle);
-//         buffer.put_u64(self.pos);
-
-//         buffer.put_u32(max);
-
-//         let mut packet = Buffer::new();
-
-//         packet.put_u32((buffer.len() + 1) as u32);
-//         packet.put_u8(SSH_FXP_READ);
-//         packet.put_bytes(buffer);
-
-//         self.sftp.write_all(packet.as_ref()).await?;
-
-//         let packet = self.sftp.recv().await?;
-
-//         match packet.msg {
-//             Message::Data(data) => {
-//                 self.pos += data.len() as u64;
-//                 Ok(data)
-//             }
-//             Message::Status { status, msg, .. } => Err(Error::SFtpRequestFailed(status, msg)),
-//             _ => Err(Error::UnexpectMsg),
-//         }
-//     }
-
-//     pub async fn write(&mut self, data: &[u8]) -> Result<()> {
-//         // ssh最大数据包检查
-//         let mut buffer = Buffer::new();
-
-//         let request_id = self.sftp.genarate_request_id();
-
-//         buffer.put_u32(request_id);
-//         buffer.put_one(&self.handle);
-//         buffer.put_u64(self.pos);
-//         buffer.put_one(data);
-
-//         let mut packet = Buffer::new();
-//         packet.put_u32((buffer.len() + 1) as u32);
-//         packet.put_u8(SSH_FXP_WRITE);
-//         packet.put_bytes(buffer);
-
-//         self.sftp.write_all(packet.as_ref()).await?;
-
-//         let packet = self.sftp.wait_for_packet(request_id).await?;
-
-//         match packet.msg {
-//             Message::Status { status, .. } if status == SSH_FX_OK => Ok(()),
-//             Message::Status { status, msg, .. } => Err(Error::SFtpRequestFailed(status, msg)),
-//             _ => Err(Error::UnexpectMsg),
-//         }
-//     }
-// }
-
-// #[derive(new)]
-// pub struct SFtpSystem {
-//     sender: Sender<Vec<u8>>,
-// }
-
-// #[async_trait::async_trait]
-// impl SubSystem for SFtpSystem {
-//     async fn append_stderr(&mut self, _: &[u8]) -> Result<()> {
-//         Ok(())
-//     }
-//     async fn append_stdout(&mut self, data: &[u8]) -> Result<()> {
-//         let _ = self.sender.send(data.to_vec()).await;
-//         Ok(())
-//     }
-// }
 
 bitflags! {
     #[derive(Clone, Copy, Debug)]
@@ -393,48 +270,6 @@ impl Packet {
 
                     let longname = String::from_utf8(longname).ok()?;
 
-                    // let flags = data.take_u32()?;
-
-                    // let mut size = None;
-                    // let mut user = None;
-                    // let mut permissions = None;
-                    // let mut time = None;
-
-                    // let mut extend = HashMap::new();
-
-                    // if flags & SSH_FILEXFER_ATTR_SIZE != 0 {
-                    //     size = Some(data.take_u64()?)
-                    // }
-
-                    // if flags & SSH_FILEXFER_ATTR_UIDGID != 0 {
-                    //     let uid = data.take_u32()?;
-                    //     let gid = data.take_u32()?;
-                    //     user = Some(User::new(uid, gid))
-                    // }
-
-                    // if flags & SSH_FILEXFER_ATTR_PERMISSIONS != 0 {
-                    //     let per = data.take_u32()?;
-                    //     permissions = Some(Permissions::from_bits_retain(per))
-                    // }
-
-                    // if flags & SSH_FILEXFER_ATTR_ACMODTIME != 0 {
-                    //     let atime = data.take_u32()?;
-                    //     let mtime = data.take_u32()?;
-
-                    //     time = Some(Time::new(atime, mtime))
-                    // }
-
-                    // if flags & SSH_FILEXFER_ATTR_EXTENDED != 0 {
-                    //     let ecount = data.take_u32()?;
-
-                    //     for _ in 0..ecount {
-                    //         let (_, key) = data.take_one()?;
-                    //         let (_, value) = data.take_one()?;
-
-                    //         extend.insert(String::from_utf8(key).ok()?, value);
-                    //     }
-                    // }
-
                     res.push(FileInfo::new(
                         filename,
                         longname,
@@ -523,19 +358,7 @@ impl Status {
     }
 }
 
-// fn status_to_result<T: Default>(status: Status, msg: String) -> Result<T> {
-//     match status {
-//         Status::OK => Ok(Default::default()),
-//         Status::EOF => Ok(Default::default()),
-//         Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
-//         Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-//         Status::FAILURE => Err(Error::SFtpFailure(msg)),
-//         Status::BadMessage => Err(Error::BadMessage(msg)),
-//         Status::NoConnection => Err(Error::NoConnection(msg)),
-//         Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
-//         Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
-//     }
-// }
+
 
 enum Message {
     FileHandle(Vec<u8>),
@@ -549,17 +372,6 @@ enum Message {
     Attributes(Attributes),
 }
 
-// impl Drop for Sftp {
-//     fn drop(&mut self) {
-//         if self.closed {
-//             return;
-//         }
-//         let _ = self.session.send_blocking(Request::ChannelDrop {
-//             id: self.id,
-//             sender: None,
-//         });
-//     }
-// }
 
 impl SFtp {
     const MAX_SFTP_PACKET: usize = 31000;
@@ -1000,30 +812,8 @@ impl SFtp {
         self.request_id
     }
 
-    // async fn write_all(&mut self, data: &[u8]) -> Result<()> {
-    //     self.buf.extend(data);
-    //     while !self.buf.is_empty() {
-    //         let size = self.write(self.buf.clone()).await?;
-    //         self.buf.drain(0..size);
-    //     }
-    //     Ok(())
-    // }
 
     async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<bool> {
-        // let (sender, recver) = async_channel::bounded(1);
-        // let request = Request::ChannelWriteStdout {
-        //     id: self.channel.id,
-        //     data,
-        //     sender,
-        // };
-
-        // self.session
-        //     .send(request)
-        //     .await
-        //     .map_err(|_| Error::Disconnect)?;
-
-        // let size = recver.recv().await.map_err(|_| Error::Disconnect)??;
-
         self.channel.write(data).await
     }
 }

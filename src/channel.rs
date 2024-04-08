@@ -18,11 +18,8 @@ use super::msg::Request;
 
 
 
-#[derive(new)]
 pub struct Channel {
-    pub(crate) id: u32,
-    // stdout: Receiver<Vec<u8>>,
-    // stderr: Receiver<Vec<u8>>,
+    id: u32,
     pub(crate) stdout: ManuallyDrop<IOReceiver>,
     stderr: ManuallyDrop<IOReceiver>,
     session: ManuallyDrop<Sender<Request>>,
@@ -43,6 +40,15 @@ use super::scp::Sender as ScpSender;
 use super::sftp::{Permissions, Timestamp};
 
 impl Channel {
+
+    pub(crate) fn new(id: u32, stdout: IOReceiver, stderr: IOReceiver, session: Sender<Request>) -> Self {
+        Self {
+            id,
+            stdout: ManuallyDrop::new(stdout),
+            stderr: ManuallyDrop::new(stderr),
+            session: ManuallyDrop::new(session)
+        }
+    }
     
     fn manually_drop(&mut self) {
         unsafe {

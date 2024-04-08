@@ -152,7 +152,7 @@ pub trait Mac {
 }
 
 #[derive(new)]
-pub struct HMac {
+struct HMac {
     mac_len: usize,
     key_len: usize,
     #[new(default)]

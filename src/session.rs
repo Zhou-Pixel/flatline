@@ -53,7 +53,6 @@ struct Endpoint {
     banner: String,
 }
 
-#[derive(new)]
 pub struct Session {
     sender: ManuallyDrop<Sender<Request>>,
 }
@@ -70,6 +69,13 @@ impl Drop for Session {
 }
 
 impl Session {
+
+    fn new(sender: Sender<Request>) -> Self {
+        Self {
+            sender: ManuallyDrop::new(sender)
+        }
+    }
+
     async fn send_request(&mut self, msg: Request) -> Result<()> {
         self.sender.send(msg).await.map_err(|_| Error::Disconnect)
     }
@@ -245,7 +251,7 @@ impl Session {
 
         let (sender, recver) = async_channel::unbounded();
 
-        let session = Session::new(ManuallyDrop::new(sender));
+        let session = Session::new(sender);
 
         let stream = socket.encrypt(
             (algo.client_crypt, algo.client_mac, algo.client_compress),
@@ -266,7 +272,7 @@ impl Session {
 }
 
 #[derive(new)]
-pub struct SessionInner<T: AsyncRead + AsyncWrite + Unpin + Send> {
+struct SessionInner<T: AsyncRead + AsyncWrite + Unpin + Send> {
     session_id: Vec<u8>,
     stream: CipherStream<T>,
     _client: Endpoint,
@@ -1019,9 +1025,9 @@ where
 
         let channel = Channel::new(
             client.id,
-            ManuallyDrop::new(stdout.1),
-            ManuallyDrop::new(stderr.1),
-            ManuallyDrop::new(session),
+            stdout.1,
+            stderr.1,
+            session,
         );
 
         let inner = ChannelInner::new(
@@ -1040,7 +1046,7 @@ where
     ) -> Result<Channel> {
         let (channel, inner) = self.channel_open_normal(initial, maximum, session).await?;
 
-        self.channels.insert(channel.id, inner);
+        self.channels.insert(inner.client.id, inner);
 
         Ok(channel)
     }

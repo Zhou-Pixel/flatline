@@ -15,8 +15,8 @@
     - `diffie-hellman-group18-sha512`
     - `diffie-hellman-group-exchange-sha256`
     - `diffie-hellman-group-exchange-sha1`
-    - `diffie-hellman-group15-sha512"`
-    - `diffie-hellman-group17-sha512"`
+    - `diffie-hellman-group15-sha512`
+    - `diffie-hellman-group17-sha512`
     - `diffie-hellman-group1-sha1`
 - **hostkey**
     - `ssh-ed25519`

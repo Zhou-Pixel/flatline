@@ -43,7 +43,7 @@ algo_list!(
 );
 
 #[derive(new)]
-pub struct Gcm {
+struct Gcm {
     name: String,
     cipher: symm::Cipher,
     block_size: usize,
@@ -364,7 +364,7 @@ impl Encrypt for CbcCtr {
 }
 
 #[derive(new)]
-pub struct CbcCtr {
+struct CbcCtr {
     name: String,
     #[new(default)]
     ctx: Option<CipherCtx>,
@@ -525,7 +525,7 @@ impl Decrypt for CbcCtr {
 }
 
 #[derive(Clone, Copy, new)]
-pub struct CipherArgs {
+struct CipherArgs {
     cipher: &'static CipherRef,
     block_size: usize,
     key_len: usize,
