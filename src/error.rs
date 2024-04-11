@@ -5,7 +5,6 @@ use thiserror::Error;
 
 use super::msg::ChannelOpenFailureReson;
 
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Error, Debug)]
@@ -16,13 +15,9 @@ pub enum Error {
     #[error("Standard io error")]
     IOError(#[from] io::Error),
 
-    // #[error("custom io timeout")]
-    // Timeout,
     #[error("UndefinedBehavior: {0}")]
     UndefinedBehavior(String),
 
-    // #[error("{0}")]
-    // SshPacketParseError(String),
     #[error("Failed to Decode binary data as utf8")]
     Utf8Error(#[from] FromUtf8Error),
 
@@ -52,7 +47,6 @@ pub enum Error {
 
     // #[error("internal error: failed to find channel")]
     // ChannelNotFound,
-
     #[error("Channel was closed")]
     ChannelClosed,
 
@@ -74,8 +68,11 @@ pub enum Error {
     #[error("Failed to parse binary: {0}")]
     InvalidFormat(String),
 
-    // #[error("error code: {0:?}, msg: {1}")]
-    // SFtpError(Status, String),
+    #[error("The packet with sequence number {0} was rejected by the server")]
+    Unimplemented(u32),
+
+    #[error("User reject: {0}")]
+    RejectByUser(String),
 
     #[error("Invalid Argument: {0}")]
     InvalidArgument(String),

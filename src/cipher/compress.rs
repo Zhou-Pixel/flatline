@@ -65,7 +65,8 @@ impl Decode for Never {
     }
 
     fn update(&mut self, data: &[u8]) -> Result<()> {
-        Ok(self.buf.extend(data))
+        self.buf.extend(data);
+        Ok(())
     }
 
     fn finalize(&mut self) -> Result<Vec<u8>> {

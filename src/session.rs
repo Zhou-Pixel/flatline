@@ -1,6 +1,8 @@
+use std::cmp::min;
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
+use super::handshake;
 use super::ssh::stream::CipherStream;
 
 use crate::channel::ChannelInner;
@@ -12,12 +14,15 @@ use crate::cipher::sign;
 use crate::error::Error;
 use crate::error::Result;
 
+use crate::handshake::Behavior;
 use crate::msg::DisconnectReson;
 use crate::msg::ExitStatus;
 use crate::sftp::SFtp;
 use crate::ssh::buffer::Buffer;
 use crate::ssh::common::code::*;
+use crate::ssh::common::PAYLOAD_MAXIMUM_SIZE;
 use crate::ssh::common::SFTP_VERSION;
+use crate::ssh::stream::BufferStream;
 use crate::utils::io_channel;
 
 use super::channel::Channel;
@@ -25,10 +30,11 @@ use super::msg::Message;
 use super::msg::Request;
 use super::msg::Userauth;
 use crate::ssh::stream::PlainStream;
-use async_channel::{Receiver, Sender};
 use derive_new::new;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 macro_rules! channel_loop {
          ($sel:ident,$id:expr,$($e:pat $(if $c:expr )? => $h:expr,)*) => {
             loop {
@@ -50,11 +56,11 @@ macro_rules! channel_loop {
 
 #[derive(new)]
 struct Endpoint {
-    banner: String,
+    _banner: String,
 }
 
 pub struct Session {
-    sender: ManuallyDrop<Sender<Request>>,
+    sender: ManuallyDrop<mpsc::Sender<Request>>,
 }
 
 impl Drop for Session {
@@ -63,16 +69,15 @@ impl Drop for Session {
             reson: DisconnectReson::BY_APPLICATION,
             desc: "exit".to_string(),
         };
-        let _ = self.sender.send_blocking(request);
+        let _ = self.sender.try_send(request);
         self.manually_drop()
     }
 }
 
 impl Session {
-
-    fn new(sender: Sender<Request>) -> Self {
+    fn new(sender: mpsc::Sender<Request>) -> Self {
         Self {
-            sender: ManuallyDrop::new(sender)
+            sender: ManuallyDrop::new(sender),
         }
     }
 
@@ -110,14 +115,14 @@ impl Session {
     }
 
     pub async fn sftp_open(&mut self) -> Result<SFtp> {
-        let (sender, recver) = async_channel::bounded(1);
+        let (sender, recver) = oneshot::channel();
         self.send_request(Request::SFtpOpen {
             session: (*self.sender).clone(),
             sender,
         })
         .await?;
 
-        recver.recv().await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnect)?
     }
 
     pub async fn channel_open_default(&mut self) -> Result<Channel> {
@@ -125,7 +130,7 @@ impl Session {
     }
 
     pub async fn channel_open(&mut self, initial: u32, maximum: u32) -> Result<Channel> {
-        let (sender, recver) = async_channel::bounded(1);
+        let (sender, recver) = oneshot::channel();
         let msg = Request::ChannelOpenSession {
             initial,
             maximum,
@@ -135,19 +140,19 @@ impl Session {
 
         self.send_request(msg).await?;
 
-        recver.recv().await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnect)?
     }
 
     pub async fn userauth_none(&mut self, username: impl Into<String>) -> Result<Userauth> {
         let username = username.into();
 
-        let (sender, recver) = async_channel::bounded(1);
+        let (sender, recver) = oneshot::channel();
 
         let requset = Request::UserauthNone { username, sender };
 
         self.send_request(requset).await?;
 
-        recver.recv().await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnect)?
     }
 
     pub async fn userauth_publickey(
@@ -157,7 +162,7 @@ impl Session {
         publickey: impl Into<Vec<u8>>,
         privatekey: impl Into<Vec<u8>>,
     ) -> Result<Userauth> {
-        let (sender, recver) = async_channel::bounded(1);
+        let (sender, recver) = oneshot::channel();
         let request = Request::UserauthPublickey {
             username: username.into(),
             method: method.into(),
@@ -167,7 +172,7 @@ impl Session {
         };
         self.send_request(request).await?;
 
-        recver.recv().await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnect)?
     }
 
     pub async fn userauth_password(
@@ -178,7 +183,7 @@ impl Session {
         let username = username.into();
         let password = password.into();
 
-        let (sender, recver) = async_channel::bounded(1);
+        let (sender, recver) = oneshot::channel();
 
         let request = Request::UserAuthPassWord {
             username,
@@ -190,51 +195,42 @@ impl Session {
             .send(request)
             .await
             .map_err(|_| Error::Disconnect)?;
-        let auth = recver.recv().await.map_err(|_| Error::Disconnect)?;
-
-        auth
+        recver.await.map_err(|_| Error::Disconnect)?
     }
 
-    pub async fn handshake<T>(mut config: super::handshake::Config, socket: T) -> Result<Self>
+    pub async fn handshake<T, B: Behavior + Send + 'static>(
+        mut config: handshake::Config<B>,
+        socket: T,
+    ) -> Result<Self>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let mut socket = PlainStream::new(socket);
-        socket.client.ext = config.ext;
-        socket.client.kex_strict = config.key_strict;
-
-        // let (banner, _) = socket.banner_exchange(config.banner.as_str()).await?;
-        // let meex = socket.method_exchange(&config).await?;
+        let mut buffer_stream = BufferStream::new(socket);
 
         let (banner, _) =
-            super::handshake::banner_exchange(&mut socket, &config.banner.as_str()).await?;
-        let meex = super::handshake::method_exchange(&mut socket, &config).await?;
+            handshake::banner_exchange(&mut buffer_stream, config.banner.as_str()).await?;
+
+        let mut plain_stream = PlainStream::new(buffer_stream);
+        plain_stream.client.ext = config.ext;
+        plain_stream.client.kex_strict = config.key_strict;
+
+        let meex = handshake::method_exchange(&mut plain_stream, &config).await?;
 
         // socket.kex_strict = config.key_strict && meex.server.1.kex_strict;
-        socket.server.kex_strict = meex.server.methods.kex_strict;
-        socket.server.ext = meex.server.methods.ext;
-        let mut algo = super::handshake::match_method(
-            &meex.client.methods,
-            &meex.server.methods,
-            &mut config,
-        )?;
+        plain_stream.server.kex_strict = meex.server.methods.kex_strict;
+        plain_stream.server.ext = meex.server.methods.ext;
+        let mut algo =
+            handshake::match_method(&meex.client.methods, &meex.server.methods, &config)?;
 
-        // let client_banner = self.client_info.banner.clone().unwrap();
-        // let clienet_kexinit = self.client_info.kex.clone().unwrap();
-
-        // let server_banner = self.server_info.banner.clone().unwrap();
-        // let server_kexinit = self.server_info.kex.clone().unwrap();
-
-        // let stream: Box<dyn SshStream> = Box::new(&mut socket);
         let dhconfig = Dependency::new(
             config.banner.clone(),
             meex.client.binary,
             banner.clone(),
             meex.server.binary,
-            socket.client.kex_strict && socket.server.kex_strict,
+            plain_stream.client.kex_strict && plain_stream.server.kex_strict,
         );
 
-        let mut result = algo.kex.kex(dhconfig, &mut socket).await?;
+        let mut result = algo.kex.kex(dhconfig, &mut plain_stream).await?;
 
         algo.hostkey.initialize(&result.server_hostkey)?;
 
@@ -245,15 +241,27 @@ impl Session {
         if !res {
             return Err(Error::HostKeyVerifyFailed);
         }
-        super::handshake::new_keys(&mut socket).await?;
+
+        if let Some(ref mut behavior) = config.behavior {
+            if !behavior
+                .verify_server_hostkey(algo.hostkey.name(), &result.server_hostkey)
+                .await?
+            {
+                return Err(Error::RejectByUser(
+                    "Server public key rejected by user".to_string(),
+                ));
+            }
+        }
+
+        handshake::new_keys(&mut plain_stream).await?;
 
         algo.initialize(&mut result)?;
 
-        let (sender, recver) = async_channel::unbounded();
+        let (sender, recver) = mpsc::channel(4096);
 
         let session = Session::new(sender);
 
-        let stream = socket.encrypt(
+        let stream = plain_stream.encrypt(
             (algo.client_crypt, algo.client_mac, algo.client_compress),
             (algo.server_crypt, algo.server_mac, algo.server_compress),
         );
@@ -264,6 +272,7 @@ impl Session {
             Endpoint::new(banner),
             recver,
             HashMap::new(),
+            config.behavior,
         );
         inner.request_userauth_service().await?;
         inner.run();
@@ -272,25 +281,31 @@ impl Session {
 }
 
 #[derive(new)]
-struct SessionInner<T: AsyncRead + AsyncWrite + Unpin + Send> {
+struct SessionInner<T, B>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+    B: Behavior + Send + 'static,
+{
     session_id: Vec<u8>,
     stream: CipherStream<T>,
     _client: Endpoint,
     _server: Endpoint,
-    recver: Receiver<Request>,
+    recver: mpsc::Receiver<Request>,
     channels: HashMap<u32, ChannelInner>,
+    behaivor: Option<B>,
 }
 
-impl<T> SessionInner<T>
+impl<T, B> SessionInner<T, B>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    B: Behavior + Send,
 {
     fn run(mut self) {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     request = self.recver.recv() => {
-                        let Ok(request) = request else {
+                        let Some(request) = request else {
                             self.session_disconnect(DisconnectReson::BY_APPLICATION, "exit").await?;
                             break;
                         };
@@ -322,10 +337,8 @@ where
     fn genarate_channel_id(&mut self) -> u32 {
         let mut next = 0;
         for (_, channel) in self.channels.iter() {
-            if channel.server.closed == false || channel.client.closed == false {
-                if next <= channel.client.id {
-                    next = channel.client.id + 1;
-                }
+            if (!channel.server.closed || !channel.client.closed) && next <= channel.client.id {
+                next = channel.client.id + 1;
             }
         }
 
@@ -355,7 +368,6 @@ where
     }
 
     async fn handle_msg(&mut self, msg: Message) -> Result<bool> {
-        // println!("handle message: {:?}", msg);
         match msg {
             Message::ChannelStdoutData { recipient, data } => {
                 self.append_channel_stdout(recipient, data).await?;
@@ -378,22 +390,64 @@ where
                 signal,
                 core_dumped,
                 error_msg,
-                ..
+                tag,
             } => {
                 let channel = self.get_server_channel(recipient)?;
 
-                channel.exit_status =
-                    Some(ExitStatus::new_interrupt(signal, core_dumped, error_msg));
+                channel.exit_status = Some(ExitStatus::new_interrupt(
+                    signal,
+                    core_dumped,
+                    error_msg,
+                    tag,
+                ));
             }
             Message::ChannelExitStatus { recipient, status } => {
                 let channel = self.get_server_channel(recipient)?;
                 channel.exit_status = Some(ExitStatus::new_normal(status));
             }
-            Message::Disconnect { .. } => {
+            Message::Disconnect {
+                reason,
+                description,
+                tag,
+            } => {
+                if let Some(ref mut behavior) = self.behaivor {
+                    behavior.disconnect(reason, &description, &tag).await?;
+                }
                 return Ok(true);
             }
             Message::Ping(data) => {
                 self.session_pong(data).await?;
+            }
+            Message::HostKeysOpenSsh {
+                want_reply,
+                hostkeys,
+            } => {
+                if let Some(ref mut behavior) = self.behaivor {
+                    let hostkeys: Vec<&[u8]> = hostkeys.iter().map(|v| v.as_slice()).collect();
+                    behavior.openssh_hostkeys(want_reply, &hostkeys).await?;
+                }
+            }
+            Message::UserauthBanner { msg, tag } => {
+                if let Some(ref mut behavior) = self.behaivor {
+                    behavior.useauth_banner(&msg, &tag).await?;
+                }
+            }
+            Message::Debug {
+                always_display,
+                msg,
+                tag,
+            } => {
+                if let Some(ref mut behavior) = self.behaivor {
+                    behavior.debug(always_display, &msg, &tag).await?;
+                }
+            }
+            Message::Ignore(data) => {
+                if let Some(ref mut behavior) = self.behaivor {
+                    behavior.ignore(&data).await?;
+                }
+            }
+            Message::Unimplemented(seqno) => {
+                return Err(Error::Unimplemented(seqno));
             }
             _ => {}
         }
@@ -415,8 +469,8 @@ where
         };
 
         channel.server.eof = eof;
-        channel.stderr.eof().await;
-        channel.stdout.eof().await;
+        channel.stderr.is_eof().await;
+        channel.stdout.is_eof().await;
 
         true
     }
@@ -485,7 +539,7 @@ where
                 sender,
             } => {
                 let res = self.userauth_password(&username, &password).await;
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::ChannelOpenSession {
                 initial,
@@ -495,31 +549,31 @@ where
             } => {
                 let res = self.channel_open_session(initial, maximum, session).await;
 
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::ChannelExec { id, cmd, sender } => {
                 let res = self.channel_exec(id, &cmd).await;
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::ChannelDrop { id, sender } => {
                 let res = self.channel_drop(id).await;
                 if let Some(sender) = sender {
-                    let _ = sender.send(res).await;
+                    let _ = sender.send(res);
                 }
             }
             Request::ChannelWriteStdout { id, data, sender } => {
                 let res = self.channel_write_stdout(id, &data).await;
 
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::SFtpOpen { session, sender } => {
                 let res = self.sftp_open(2 * 1024 * 1024, 32768, session).await;
 
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::UserauthNone { username, sender } => {
                 let res = self.userauth_none(&username).await;
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::UserauthPublickey {
                 username,
@@ -531,22 +585,22 @@ where
                 let res = self
                     .userauth_publickey(&username, &method, &publickey, &privatekey)
                     .await;
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::ChannelExecWait { id, cmd, sender } => {
                 let res = self.channel_exec_wait(id, &cmd).await;
 
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::ChannelGetExitStatus { id, sender } => {
                 let res = self.wait_for_finish(id).await;
 
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::ChannelEOF { id, sender } => {
                 let res = self.channel_eof(id).await;
 
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::ChannelSetEnv {
                 id,
@@ -555,11 +609,11 @@ where
                 sender,
             } => {
                 let res = self.channel_set_env(id, &name, &value).await;
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::ChannelSendSignal { id, signal, sender } => {
                 let res = self.channel_send_signal(id, &signal.0).await;
-                let _ = sender.send(res).await;
+                let _ = sender.send(res);
             }
             Request::SessionDrop { reson, desc } => {
                 let _ = self.session_disconnect(reson, &desc).await;
@@ -568,10 +622,8 @@ where
             Request::ChannelFlushStdout { id, sender } => {
                 let res = self.channel_flush_stdout_blocking(id).await;
 
-
-                let _ = sender.send(res).await;
-
-            },
+                let _ = sender.send(res);
+            }
         }
         false
     }
@@ -647,12 +699,13 @@ where
                 signal,
                 core_dumped,
                 error_msg,
-                ..
+                tag,
             } if recipient == id => {
                 break ExitStatus::Interrupt {
                     signal,
                     core_dumped,
                     error_msg,
+                    tag
                 };
             },
         );
@@ -681,12 +734,13 @@ where
                 signal,
                 core_dumped,
                 error_msg,
-                ..
+                tag
             } if recipient == id => {
                 break ExitStatus::Interrupt {
                     signal,
                     core_dumped,
                     error_msg,
+                    tag
                 };
             },
         );
@@ -702,7 +756,6 @@ where
     }
 
     async fn channel_flush_stdout_blocking(&mut self, id: u32) -> Result<()> {
-
         let channel = self
             .channels
             .get_mut(&id)
@@ -716,42 +769,27 @@ where
             return Err(Error::ChannelEOF);
         }
 
-        while !channel.stdout_buf.is_empty() {
-            while channel.server.size == 0 {
-                channel_loop!(
-                    self,
-                    id,
-                    Message::ChannelWindowAdjust { recipient, count } if recipient == id => {
-                        self.add_channel_bytes_count(id, count)?;
-                    },
-                );
-            }
+        while !channel.stdout_buf.is_empty() && channel.server.size > 0 {
             let mut buffer = Buffer::new();
 
             buffer.put_u8(SSH_MSG_CHANNEL_DATA);
 
             buffer.put_u32(channel.server.id);
 
+            let len = min(channel.server.maximum, channel.server.size) as usize;
+            let len = min(channel.stdout_buf.len(), len);
 
-            let len = if channel.server.size as usize >= channel.stdout_buf.len() {
-                channel.stdout_buf.len()
-            } else {
-                channel.server.size as _
-            };
-    
             buffer.put_one(&channel.stdout_buf[..len]);
-    
+
             self.stream.send_payload(buffer.as_ref()).await?;
             channel.stdout_buf.drain(..len);
             channel.server.size -= len as u32;
         }
 
-
-
         Ok(())
     }
 
-    async fn channel_flush_stdout(&mut self, id: u32) -> Result<()> {
+    async fn channel_flush_stdout(&mut self, id: u32) -> Result<bool> {
         let channel = self
             .channels
             .get_mut(&id)
@@ -772,22 +810,18 @@ where
 
             buffer.put_u32(channel.server.id);
 
+            let len = min(channel.server.maximum, channel.server.size) as usize;
+            let len = min(len, PAYLOAD_MAXIMUM_SIZE - 200);
+            let len = min(channel.stdout_buf.len(), len);
 
-            let len = if channel.server.size as usize >= channel.stdout_buf.len() {
-                channel.stdout_buf.len()
-            } else {
-                channel.server.size as _
-            };
-    
             buffer.put_one(&channel.stdout_buf[..len]);
-    
+
             self.stream.send_payload(buffer.as_ref()).await?;
             channel.stdout_buf.drain(..len);
             channel.server.size -= len as u32;
-            
         }
 
-        Ok(())
+        Ok(channel.stdout_buf.is_empty())
     }
 
     async fn channel_write_stdout(&mut self, id: u32, data: &[u8]) -> Result<bool> {
@@ -805,13 +839,13 @@ where
             return Err(Error::ChannelEOF);
         }
 
+        channel.stdout_buf.extend(data);
+
         if data.is_empty() {
             return Ok(true);
         } else if channel.server.size == 0 {
             return Ok(false);
         }
-
-        channel.stdout_buf.extend(data);
 
         let mut buffer = Buffer::new();
 
@@ -819,11 +853,9 @@ where
 
         buffer.put_u32(channel.server.id);
 
-        let len = if channel.server.size as usize >= channel.stdout_buf.len() {
-            channel.stdout_buf.len()
-        } else {
-            channel.server.size as _
-        };
+        let len = min(channel.server.maximum, channel.server.size) as usize;
+        let len = min(len, PAYLOAD_MAXIMUM_SIZE - 100);
+        let len = min(channel.stdout_buf.len(), len);
 
         buffer.put_one(&channel.stdout_buf[..len]);
 
@@ -889,10 +921,12 @@ where
     async fn handle_channel_close(&mut self, id: u32) -> Result<()> {
         let mut channel = self.remove_channel(id)?;
         if channel.server.closed {
-            return Err(Error::ProtocolError("The channel is already closed".to_string()));
+            return Err(Error::ProtocolError(
+                "The channel is already closed".to_string(),
+            ));
         }
-        channel.stderr.close().await;
-        channel.stdout.close().await;
+        channel.stderr.is_closed().await;
+        channel.stdout.is_closed().await;
         channel.server.closed = true;
 
         if !channel.client.closed {
@@ -1016,19 +1050,14 @@ where
         &mut self,
         initial: u32,
         maximum: u32,
-        session: Sender<Request>,
+        session: mpsc::Sender<Request>,
     ) -> Result<(Channel, ChannelInner)> {
         let (client, server) = self.channel_open_raw(initial, maximum).await?;
 
         let stdout = io_channel();
         let stderr = io_channel();
 
-        let channel = Channel::new(
-            client.id,
-            stdout.1,
-            stderr.1,
-            session,
-        );
+        let channel = Channel::new(client.id, stdout.1, stderr.1, session);
 
         let inner = ChannelInner::new(
             client, server, // Box::new(NormalChannel::new(stdout.0, stderr.0)),
@@ -1042,7 +1071,7 @@ where
         &mut self,
         initial: u32,
         maximum: u32,
-        session: Sender<Request>,
+        session: mpsc::Sender<Request>,
     ) -> Result<Channel> {
         let (channel, inner) = self.channel_open_normal(initial, maximum, session).await?;
 
@@ -1066,8 +1095,10 @@ where
                     self.stream.authed = true;
                     Ok(Userauth::Success)
                 }
-                Message::UserauthFailure { methods, .. } => Ok(Userauth::Failure(methods)),
-                Message::UserauthChangeReq => Ok(Userauth::Failure(vec![])),
+                Message::UserauthFailure { methods, partial } => {
+                    Ok(Userauth::Failure(methods, partial))
+                }
+                Message::UserauthChangeReq => Ok(Userauth::Failure(vec![], false)),
 
                 msg => {
                     self.handle_msg(msg).await?;
@@ -1094,7 +1125,9 @@ where
                     self.stream.authed = true;
                     Ok(Userauth::Success)
                 }
-                Message::UserauthFailure { methods, .. } => Ok(Userauth::Failure(methods)),
+                Message::UserauthFailure { methods, partial } => {
+                    Ok(Userauth::Failure(methods, partial))
+                }
                 Message::UserauthChangeReq => Ok(Userauth::Expired),
 
                 msg => {
@@ -1130,17 +1163,21 @@ where
             let mut payload = Buffer::from_vec(packet.payload.clone());
             let code = payload
                 .take_u8()
-                .ok_or(Error::invalid_format("invalid ssh packet"))?;
+                .ok_or(Error::invalid_format("Invalid ssh packet"))?;
             match code {
                 SSH_MSG_USERAUTH_FAILURE => {
                     let (_, methods) = payload
                         .take_one()
-                        .ok_or(Error::invalid_format("invalid ssh packet"))?;
+                        .ok_or(Error::invalid_format("Invalid ssh packet"))?;
                     return Ok(Userauth::Failure(
                         String::from_utf8(methods)?
-                            .split(",")
+                            .split(',')
                             .map(|v| v.to_string())
                             .collect(),
+                        payload
+                            .take_u8()
+                            .ok_or(Error::invalid_format("Invalid ssh packet"))?
+                            != 0,
                     ));
                 }
                 SSH_MSG_USERAUTH_SUCCESS => return Ok(Userauth::Success),
@@ -1195,8 +1232,8 @@ where
                     self.stream.authed = true;
                     break Ok(Userauth::Success);
                 }
-                Message::UserauthFailure { methods, .. } => {
-                    break Ok(Userauth::Failure(methods));
+                Message::UserauthFailure { methods, partial } => {
+                    break Ok(Userauth::Failure(methods, partial));
                 }
                 msg => {
                     self.handle_msg(msg).await?;
@@ -1209,7 +1246,7 @@ where
         &mut self,
         initial: u32,
         maximum: u32,
-        session: Sender<Request>,
+        session: mpsc::Sender<Request>,
     ) -> Result<SFtp> {
         let (channel, inner) = self
             .channel_open_normal(initial, maximum, session.clone())
@@ -1282,7 +1319,6 @@ where
                     }
                     Message::ChannelStdoutData { recipient, data } if recipient == client_id => {
                         let mut data = Buffer::from_vec(data);
-
                         let (_, data) = data
                             .take_one()
                             .ok_or(Error::invalid_format("Invalid ssh packet"))?;
@@ -1294,7 +1330,9 @@ where
                             .ok_or(Error::invalid_format("Invalid ssh packet"))?;
 
                         if value != SSH_FXP_VERSION {
-                            return Err(Error::ProtocolError("Unable to receive SFtp version".to_string()));
+                            return Err(Error::ProtocolError(
+                                "Unable to receive SFtp version".to_string(),
+                            ));
                         }
 
                         let version = data

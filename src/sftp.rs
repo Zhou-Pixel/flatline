@@ -3,7 +3,6 @@ use std::collections::HashMap;
 
 use byteorder::{BigEndian, ByteOrder};
 use derive_new::new;
-use num_enum::TryFromPrimitive;
 
 use crate::channel::Channel;
 use crate::error::Result;
@@ -59,10 +58,7 @@ pub struct File {
 
 impl File {
     fn new(handle: Vec<u8>) -> Self {
-        Self {
-            handle,
-            pos: 0
-        }
+        Self { handle, pos: 0 }
     }
 }
 
@@ -72,12 +68,9 @@ pub struct Dir {
 
 impl Dir {
     fn new(handle: Vec<u8>) -> Self {
-        Self {
-            handle
-        }
+        Self { handle }
     }
 }
-
 
 bitflags! {
     #[derive(Clone, Copy, Debug)]
@@ -151,11 +144,9 @@ impl Attributes {
             tmp.put_u32(time.mtime);
         }
 
-
         let count = self.extend.len() as u32;
 
         tmp.put_u32(count);
-
 
         for (k, v) in &self.extend {
             tmp.put_one(k);
@@ -163,10 +154,6 @@ impl Attributes {
         }
         buffer.put_u32(flags);
         buffer.put_bytes(tmp);
-
-
-
-
     }
     fn parse(buffer: &mut Buffer) -> Option<Self> {
         let flags = buffer.take_u32()?;
@@ -232,7 +219,7 @@ impl Packet {
         let mut data = Buffer::from_vec(data.into());
         let (_, data) = data.take_one()?;
 
-        let mut data = Buffer::from_vec(data.into());
+        let mut data = Buffer::from_vec(data);
 
         let code = data.take_u8()?;
         let id = data.take_u32()?;
@@ -252,10 +239,10 @@ impl Packet {
 
                 let msg = String::from_utf8(msg).ok()?;
 
-                let tag = String::from_utf8(tag).ok()?;
+                let _tag = String::from_utf8(tag).ok()?;
 
-                let status = Status::try_from(status).ok()?;
-                Message::Status { status, msg, tag }
+                let status = Status::from_status(status).ok()?;
+                Message::Status { status, msg, _tag }
             }
             SSH_FXP_DATA => Message::Data(data.take_one()?.1),
             SSH_FXP_NAME => {
@@ -286,14 +273,14 @@ impl Packet {
     }
 }
 
-#[derive(TryFromPrimitive, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 #[repr(u32)]
 enum Status {
     OK = SSH_FX_OK,
-    EOF = SSH_FX_EOF,
+    Eof = SSH_FX_EOF,
     NoSuchFile = SSH_FX_NO_SUCH_FILE,
     PermissionDenied = SSH_FX_PERMISSION_DENIED,
-    FAILURE = SSH_FX_FAILURE,
+    Failure = SSH_FX_FAILURE,
     BadMessage = SSH_FX_BAD_MESSAGE,
     NoConnection = SSH_FX_NO_CONNECTION,
     ConnectionLost = SSH_FX_CONNECTION_LOST,
@@ -301,27 +288,46 @@ enum Status {
 }
 
 impl Status {
-    fn to_result<T: Default>(&self, msg: String) -> Result<T> {
-        match self {
-            Status::OK => Ok(Default::default()),
-            Status::EOF => Ok(Default::default()),
-            Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
-            Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-            Status::FAILURE => Err(Error::SFtpFailure(msg)),
-            Status::BadMessage => Err(Error::BadMessage(msg)),
-            Status::NoConnection => Err(Error::NoConnection(msg)),
-            Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
-            Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
-        }
+    fn from_status(code: u32) -> Result<Self> {
+        Ok(match code {
+            SSH_FX_OK => Self::OK,
+            SSH_FX_EOF => Self::Eof,
+            SSH_FX_NO_SUCH_FILE => Self::NoSuchFile,
+            SSH_FX_PERMISSION_DENIED => Self::PermissionDenied,
+            SSH_FX_FAILURE => Self::Failure,
+            SSH_FX_BAD_MESSAGE => Self::BadMessage,
+            SSH_FX_NO_CONNECTION => Self::NoConnection,
+            SSH_FX_CONNECTION_LOST => Self::ConnectionLost,
+            SSH_FX_OP_UNSUPPORTED => Self::OpUnsupported,
+            _ => return Err(Error::invalid_format("Invalid Sftp status code")),
+        })
     }
+
+    // fn to_result<T: Default>(&self, msg: String) -> Result<T> {
+    //     match self {
+    //         Status::OK => Ok(Default::default()),
+    //         Status::EOF => Ok(Default::default()),
+    //         Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
+    //         Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
+    //         Status::FAILURE => Err(Error::SFtpFailure(msg)),
+    //         Status::BadMessage => Err(Error::BadMessage(msg)),
+    //         Status::NoConnection => Err(Error::NoConnection(msg)),
+    //         Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
+    //         Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
+    //     }
+    // }
 
     fn no_ok_and_eof<T>(&self, msg: String) -> Result<T> {
         match self {
-            Status::OK => Err(Error::ProtocolError("Unexpected Ok status received".to_string())),
-            Status::EOF => Err(Error::ProtocolError("Unexpected EOF status received".to_string())),
+            Status::OK => Err(Error::ProtocolError(
+                "Unexpected Ok status received".to_string(),
+            )),
+            Status::Eof => Err(Error::ProtocolError(
+                "Unexpected EOF status received".to_string(),
+            )),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-            Status::FAILURE => Err(Error::SFtpFailure(msg)),
+            Status::Failure => Err(Error::SFtpFailure(msg)),
             Status::BadMessage => Err(Error::BadMessage(msg)),
             Status::NoConnection => Err(Error::NoConnection(msg)),
             Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
@@ -332,10 +338,12 @@ impl Status {
     fn no_eof<T: Default>(&self, msg: String) -> Result<T> {
         match self {
             Status::OK => Ok(Default::default()),
-            Status::EOF => Err(Error::ProtocolError("Unexpected EOF status received".to_string())),
+            Status::Eof => Err(Error::ProtocolError(
+                "Unexpected EOF status received".to_string(),
+            )),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-            Status::FAILURE => Err(Error::SFtpFailure(msg)),
+            Status::Failure => Err(Error::SFtpFailure(msg)),
             Status::BadMessage => Err(Error::BadMessage(msg)),
             Status::NoConnection => Err(Error::NoConnection(msg)),
             Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
@@ -345,11 +353,13 @@ impl Status {
 
     fn no_ok<T: Default>(&self, msg: String) -> Result<T> {
         match self {
-            Status::OK => Err(Error::ProtocolError("Unexpected Ok status received".to_string())),
-            Status::EOF => Ok(Default::default()),
+            Status::OK => Err(Error::ProtocolError(
+                "Unexpected Ok status received".to_string(),
+            )),
+            Status::Eof => Ok(Default::default()),
             Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
             Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-            Status::FAILURE => Err(Error::SFtpFailure(msg)),
+            Status::Failure => Err(Error::SFtpFailure(msg)),
             Status::BadMessage => Err(Error::BadMessage(msg)),
             Status::NoConnection => Err(Error::NoConnection(msg)),
             Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
@@ -358,23 +368,20 @@ impl Status {
     }
 }
 
-
-
 enum Message {
     FileHandle(Vec<u8>),
     Status {
         status: Status,
         msg: String,
-        tag: String,
+        _tag: String,
     },
     Data(Vec<u8>),
     Name(Vec<FileInfo>),
     Attributes(Attributes),
 }
 
-
 impl SFtp {
-    const MAX_SFTP_PACKET: usize = 31000;
+    const MAX_SFTP_PACKET: usize = 32000;
 
     pub fn extend(&self, key: &str) -> Option<&[u8]> {
         self.ext.get(key).map(|v| v.as_ref())
@@ -432,7 +439,6 @@ impl SFtp {
 
         self.send(SSH_FXP_READ, buffer.as_ref()).await?;
 
-
         let packet = self.recv().await?;
 
         match packet.msg {
@@ -457,62 +463,46 @@ impl SFtp {
     }
 
     pub async fn write_file_buf(&mut self, file: &mut File, data: &[u8]) -> Result<()> {
-
-
-        let time = std::time::Instant::now();
+        if data.is_empty() {
+            return Ok(());
+        }
         let max = Self::MAX_SFTP_PACKET;
         let mut requests = vec![];
+        let mut buffer = Buffer::new();
         for i in (0..data.len()).step_by(max) {
-
-
             let left = data.len() - i;
-
 
             let min = min(left, max);
 
-            let mut buffer = Buffer::new();
-
             let request_id = self.genarate_request_id();
-    
+
             buffer.put_u32(request_id);
             buffer.put_one(&file.handle);
             buffer.put_u64(file.pos);
             buffer.put_one(&data[i..i + min]);
-    
+
             self.send(SSH_FXP_WRITE, buffer.as_ref()).await?;
-    
+
             requests.push(request_id);
             file.pos += min as u64;
-    
-    
-
-
+            buffer.clear();
         }
 
-        for i in requests {
-            self.wait_for_status(i, Status::no_eof).await?;
+        for id in requests {
+            self.wait_for_status(id, Status::no_eof).await?;
         }
 
-        println!("time spend: {}", time.elapsed().as_millis());
         Ok(())
     }
 
     pub async fn write_file(&mut self, file: &mut File, data: &[u8]) -> Result<()> {
-
-
         let max = Self::MAX_SFTP_PACKET;
         for i in (0..data.len()).step_by(max) {
-
-
             let left = data.len() - i;
-
 
             let min = min(left, max);
 
-            self.write_file_unchecked(file, &data[i..i+min]).await?;
-
-
-
+            self.write_file_unchecked(file, &data[i..i + min]).await?;
         }
 
         Ok(())
@@ -531,8 +521,6 @@ impl SFtp {
 
         self.send(SSH_FXP_WRITE, buffer.as_ref()).await?;
 
-
-
         let res = self.wait_for_status(request_id, Status::no_eof).await;
         if res.is_ok() {
             file.pos += data.len() as u64;
@@ -540,9 +528,9 @@ impl SFtp {
         res
     }
 
-    async fn wait_for_status<T, B>(&mut self, id: u32, f: T) -> Result<B> 
+    async fn wait_for_status<T, B>(&mut self, id: u32, f: T) -> Result<B>
     where
-        T: FnOnce(&Status, String) -> Result<B>
+        T: FnOnce(&Status, String) -> Result<B>,
     {
         let packet = self.wait_for_packet(id).await?;
 
@@ -685,8 +673,6 @@ impl SFtp {
     }
 
     pub async fn set_stat(&mut self, path: &str, attrs: &Attributes) -> Result<()> {
-
-
         let request_id = self.genarate_request_id();
 
         let mut buffer = Buffer::new();
@@ -695,16 +681,12 @@ impl SFtp {
 
         attrs.to_bytes(&mut buffer);
 
-
         self.send(SSH_FXP_SETSTAT, buffer.as_ref()).await?;
 
-
         self.wait_for_status(request_id, Status::no_eof).await
-        
     }
 
     pub async fn set_fstat(&mut self, file: &File, attrs: &Attributes) -> Result<()> {
-
         let request_id = self.genarate_request_id();
 
         let mut buffer = Buffer::new();
@@ -713,12 +695,9 @@ impl SFtp {
 
         attrs.to_bytes(&mut buffer);
 
-
         self.send(SSH_FXP_FSETSTAT, buffer.as_ref()).await?;
 
-
         self.wait_for_status(request_id, Status::no_eof).await
-        
     }
 
     pub async fn read_link(&mut self, path: &str) -> Result<FileInfo> {
@@ -737,7 +716,6 @@ impl SFtp {
             Message::Name(mut infos) if infos.len() == 1 => Ok(infos.remove(0)),
             _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
-
     }
 
     pub async fn symlink(&mut self, linkpath: &str, targetpath: &str) -> Result<()> {
@@ -844,7 +822,6 @@ impl SFtp {
         let len = BigEndian::read_u32(&data);
 
         data.extend(self.channel.stdout.read_exact(len as usize).await?);
-
         Packet::parse(data).ok_or(Error::invalid_format("unable to parse sftp packet"))
     }
 
@@ -852,7 +829,6 @@ impl SFtp {
         self.request_id = self.request_id.wrapping_add(1);
         self.request_id
     }
-
 
     async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<bool> {
         self.channel.write(data).await

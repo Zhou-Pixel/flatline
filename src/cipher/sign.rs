@@ -1,7 +1,18 @@
 use derive_new::new;
 use indexmap::IndexMap;
 use openssl::{
-    bn::{BigNum, BigNumContext}, dsa::{self, DsaSig}, ec::{EcKey, EcPoint}, ecdsa::EcdsaSig, hash::MessageDigest, md::{Md, MdRef}, md_ctx::MdCtx, nid::Nid, pkey::{Id, PKey, Private, Public}, pkey_ctx::PkeyCtx, rsa::{self, Padding, RsaPrivateKeyBuilder}, sign::{Signer, Verifier}
+    bn::{BigNum, BigNumContext},
+    dsa::{self, DsaSig},
+    ec::{EcKey, EcPoint},
+    ecdsa::EcdsaSig,
+    hash::MessageDigest,
+    md::{Md, MdRef},
+    md_ctx::MdCtx,
+    nid::Nid,
+    pkey::{Id, PKey, Private, Public},
+    pkey_ctx::PkeyCtx,
+    rsa::{self, Padding, RsaPrivateKeyBuilder},
+    sign::{Signer, Verifier},
 };
 
 use crate::{
@@ -41,8 +52,8 @@ algo_list!(
     "ecdsa-sha2-nistp384" => Ecdsa::ecdsa_sha2_nistp384(),
 );
 
-
 pub trait Signature {
+    fn name(&self) -> &str;
     fn initialize(&mut self, key: &[u8]) -> Result<()>;
     fn signature(&mut self, data: &[u8]) -> Result<Vec<u8>>;
 }
@@ -93,9 +104,14 @@ impl Signature for Ed25519 {
         ctx.digest_sign(data, Some(&mut buffer))?;
         Ok(buffer)
     }
+
+    fn name(&self) -> &str {
+        "ssh-ed25519"
+    }
 }
 
 pub trait Verify {
+    fn name(&self) -> &str;
     fn initialize(&mut self, key: &[u8]) -> Result<()>;
     fn verify(&mut self, signature: &[u8], data: &[u8]) -> Result<bool>;
 }
@@ -143,6 +159,10 @@ impl Verify for Ed25519 {
         self.ctx = Some(ctx);
 
         Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "ssh-ed25519"
     }
 }
 
@@ -242,6 +262,10 @@ impl Verify for Rsa<Public> {
             _ => Err(Error::ub("it must be initilized before verify")),
         }
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl Signature for Rsa<Private> {
@@ -271,13 +295,6 @@ impl Signature for Rsa<Private> {
         };
 
         let (n, e, d, iqmp, p, q) = func().ok_or(Error::invalid_format("invalid key format"))?;
-
-        // println!("n: {n:?}");
-        // println!("e: {e:?}");
-        // println!("d: {d:?}");
-        // println!("iqmp: {iqmp:?}");
-        // println!("p: {p:?}");
-        // println!("q: {q:?}");
 
         let n = BigNum::from_slice(&n)?;
         let e = BigNum::from_slice(&e)?;
@@ -319,12 +336,16 @@ impl Signature for Rsa<Private> {
 
         Ok(vec)
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(new)]
 struct Dsa<T> {
     #[new(default)]
-    key: Option<PKey<T>>
+    key: Option<PKey<T>>,
 }
 
 impl<T> Dsa<T> {
@@ -358,8 +379,6 @@ impl Verify for Dsa<Public> {
 
         let key = PKey::from_dsa(key)?;
 
- 
-
         self.key = Some(key);
 
         Ok(())
@@ -386,7 +405,6 @@ impl Verify for Dsa<Public> {
         let r = BigNum::from_slice(&signature[0..20])?;
         let s = BigNum::from_slice(&signature[20..])?;
 
-
         let signature = DsaSig::from_private_components(r, s)?;
 
         // Serialize DSA signature to DER
@@ -397,16 +415,17 @@ impl Verify for Dsa<Public> {
         verifier.update(data)?;
 
         Ok(verifier.verify(&signature[..]).unwrap_or(false))
+    }
 
+    fn name(&self) -> &str {
+        todo!()
     }
 }
-
-
 
 impl Signature for Dsa<Private> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
         let mut key = Buffer::from_vec(key.to_vec());
-                // let invalid_key_format = || Error::invalid_format("invalid key format");
+        // let invalid_key_format = || Error::invalid_format("invalid key format");
 
         let mut take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
 
@@ -430,8 +449,6 @@ impl Signature for Dsa<Private> {
 
         self.key = Some(PKey::from_dsa(key)?);
 
-
-
         Ok(())
     }
 
@@ -444,8 +461,11 @@ impl Signature for Dsa<Private> {
 
         Ok(signer.sign_to_vec()?)
     }
-}
 
+    fn name(&self) -> &str {
+        "ssh-dss"
+    }
+}
 
 fn invalid_key_format() -> Error {
     Error::invalid_format("invalid key format")
@@ -457,15 +477,13 @@ struct Ecdsa<T> {
     nid: Nid,
     hash: &'static MdRef,
     #[new(default)]
-    key: Option<PKey<T>>
+    key: Option<PKey<T>>,
 }
 
 impl<T> Ecdsa<T> {
     fn calculate_hash(&self, data: &[u8]) -> Result<Vec<u8>> {
-
         let mut ctx = MdCtx::new()?;
         ctx.digest_init(self.hash)?;
-
 
         ctx.digest_update(data)?;
 
@@ -483,15 +501,27 @@ impl<T> Ecdsa<T> {
 
 impl<T> Ecdsa<T> {
     fn ecdsa_sha2_nistp256() -> Self {
-        Self::new("ecdsa-sha2-nistp256".to_string(), Nid::X9_62_PRIME256V1, Md::sha256())
+        Self::new(
+            "ecdsa-sha2-nistp256".to_string(),
+            Nid::X9_62_PRIME256V1,
+            Md::sha256(),
+        )
     }
 
     fn ecdsa_sha2_nistp384() -> Self {
-        Self::new("ecdsa-sha2-nistp384".to_string(), Nid::SECP384R1, Md::sha384())
+        Self::new(
+            "ecdsa-sha2-nistp384".to_string(),
+            Nid::SECP384R1,
+            Md::sha384(),
+        )
     }
 
     fn ecdsa_sha2_nistp521() -> Self {
-        Self::new("ecdsa-sha2-nistp521".to_string(), Nid::SECP521R1, Md::sha512())
+        Self::new(
+            "ecdsa-sha2-nistp521".to_string(),
+            Nid::SECP521R1,
+            Md::sha512(),
+        )
     }
 }
 
@@ -512,7 +542,6 @@ impl Signature for Ecdsa<Private> {
         let public_key = key.take_one().ok_or_else(invalid_key_format)?.1;
         let e = key.take_one().ok_or_else(invalid_key_format)?.1;
 
-
         let eckey = EcKey::from_curve_name(self.nid)?;
         let group = eckey.group();
 
@@ -523,13 +552,11 @@ impl Signature for Ecdsa<Private> {
         let e = BigNum::from_slice(&e)?;
         let private = EcKey::from_private_components(group, &e, &point)?;
 
-
         let pkey = PKey::from_ec_key(private)?;
 
         self.key = Some(pkey);
 
         Ok(())
-
     }
 
     fn signature(&mut self, data: &[u8]) -> Result<Vec<u8>> {
@@ -546,12 +573,15 @@ impl Signature for Ecdsa<Private> {
 
         Ok(out)
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl Verify for Ecdsa<Public> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
         let mut key = Buffer::from_vec(key.to_vec());
-
 
         let keytype = key.take_one().ok_or_else(invalid_key_format)?.1;
         if self.name.as_bytes() != keytype {
@@ -568,12 +598,10 @@ impl Verify for Ecdsa<Public> {
 
         let eckey = EcKey::from_curve_name(self.nid)?;
         let group = eckey.group();
-        
+
         let mut bnctx = BigNumContext::new()?;
         let point = EcPoint::from_bytes(group, &public_key, &mut bnctx)?;
         let point = EcKey::from_public_key(group, &point)?;
-
-
 
         point.check_key()?;
 
@@ -595,21 +623,22 @@ impl Verify for Ecdsa<Public> {
         let r = signature.take_one().ok_or_else(invalid_key_format)?.1;
         let s = signature.take_one().ok_or_else(invalid_key_format)?.1;
 
-        let ecsig = EcdsaSig::from_private_components(BigNum::from_slice(&r)?, BigNum::from_slice(&s)?)?;
+        let ecsig =
+            EcdsaSig::from_private_components(BigNum::from_slice(&r)?, BigNum::from_slice(&s)?)?;
 
         let signature = ecsig.to_der()?;
 
         let hash = self.calculate_hash(data)?;
 
-
         let key = self.get_key()?;
-
 
         let mut ctx = PkeyCtx::new(key)?;
 
         ctx.verify_init()?;
         Ok(ctx.verify(&hash, &signature)?)
+    }
 
-
+    fn name(&self) -> &str {
+        &self.name
     }
 }

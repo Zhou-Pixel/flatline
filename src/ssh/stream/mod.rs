@@ -1,13 +1,9 @@
 use std::{
     io,
-    mem::{size_of, take},
-    ops::{Deref, DerefMut},
+    mem::size_of,
+    // mem::take,
+    // ops::{Deref, DerefMut},
 };
-
-// trait Stream {
-//     async fn send_payload(&mut self, payload: &[u8]) -> SshResult<()>;
-//     async fn recv_packet(&mut self) -> SshResult<Packet>;
-// }
 
 use super::{common::PACKET_MAXIMUM_SIZE, packet::Packet};
 
@@ -26,8 +22,6 @@ pub trait Stream: Send {
     async fn recv_packet(&mut self) -> Result<Packet>;
     async fn send_new_keys(&mut self) -> Result<()>;
 }
-
-
 
 #[async_trait::async_trait]
 impl<T> Stream for PlainStream<T>
@@ -81,19 +75,18 @@ impl<T: AsyncRead + AsyncWrite + Unpin> BufferStream<T> {
             ));
         }
         Ok(size)
-        // self.socket.read_buf(&mut self.r_buf).await
     }
 
-    pub async fn read_line_lf(&mut self) -> io::Result<Vec<u8>> {
-        loop {
-            // todo: improve performance
-            let pos = self.r_buf.iter().position(|&x| x == b'\n');
-            if let Some(pos) = pos {
-                return Ok(self.r_buf.split_to(pos).to_vec());
-            }
-            self.internal_read().await?;
-        }
-    }
+    // pub async fn read_line_lf(&mut self) -> io::Result<Vec<u8>> {
+    //     loop {
+    //         // todo: improve performance
+    //         let pos = self.r_buf.iter().position(|&x| x == b'\n');
+    //         if let Some(pos) = pos {
+    //             return Ok(self.r_buf.split_to(pos).to_vec());
+    //         }
+    //         self.internal_read().await?;
+    //     }
+    // }
 
     pub async fn read_line_crlf(&mut self) -> io::Result<Vec<u8>> {
         loop {
@@ -109,18 +102,18 @@ impl<T: AsyncRead + AsyncWrite + Unpin> BufferStream<T> {
         }
     }
 
-    pub async fn read_buf_at_least(&mut self) -> io::Result<Vec<u8>> {
-        self.socket.read_buf(&mut self.r_buf).await?;
+    // pub async fn read_buf_at_least(&mut self) -> io::Result<Vec<u8>> {
+    //     self.socket.read_buf(&mut self.r_buf).await?;
 
-        Ok(take(&mut self.r_buf).to_vec())
-    }
+    //     Ok(take(&mut self.r_buf).to_vec())
+    // }
 
-    pub async fn read_buf(&mut self) -> io::Result<Vec<u8>> {
-        if self.r_buf.is_empty() {
-            self.socket.read_buf(&mut self.r_buf).await?;
-        }
-        Ok(take(&mut self.r_buf).to_vec())
-    }
+    // pub async fn read_buf(&mut self) -> io::Result<Vec<u8>> {
+    //     if self.r_buf.is_empty() {
+    //         self.socket.read_buf(&mut self.r_buf).await?;
+    //     }
+    //     Ok(take(&mut self.r_buf).to_vec())
+    // }
 
     pub async fn write(&mut self, data: impl AsRef<[u8]>) -> io::Result<()> {
         self.w_buf.put(data.as_ref());
@@ -175,48 +168,23 @@ where
     stream: BufferStream<T>,
     pub client: NormalEndpoint,
     pub server: NormalEndpoint,
-    // pub kex_strict: bool
 }
 
-impl<T> Deref for PlainStream<T>
-where
-    T: AsyncRead + AsyncWrite + Send,
-{
-    type Target = BufferStream<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.stream
-    }
-}
-
-impl<T> DerefMut for PlainStream<T>
-where
-    T: AsyncRead + AsyncWrite + Send,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.stream
-    }
-}
-
-// #[derive(Default)]
 pub struct EncryptedEndpoint {
-    // pub cipher: Box<dyn Decrypt + Send>,
     pub mac: Box<dyn Mac + Send>,
     pub kex_strict: bool,
     pub sequence_number: u32,
-    // pub compress: Option<Box<dyn Encode + Send>>,
 }
 
 impl<T> PlainStream<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    pub fn new(socket: T) -> Self {
+    pub fn new(stream: BufferStream<T>) -> Self {
         Self {
-            stream: BufferStream::new(socket),
+            stream,
             client: Default::default(),
             server: Default::default(),
-            // kex_strict: false
         }
     }
 
@@ -307,7 +275,7 @@ where
         // let integerated_mac = self.hostkey_cts.as_ref().map(|v| v.integrated_mac()) == Some(true);
 
         let mut padding_len = block_size - ((4 + 1 + payload_len) % block_size);
-        if padding_len < 4 && padding_len != 0 {
+        if padding_len < 4 {
             padding_len += block_size;
         }
 
@@ -328,6 +296,7 @@ where
 
         packet.extend(rand_padding);
         self.stream.write(packet).await?;
+        self.stream.flush().await?;
         self.client.sequence_number = self.client.sequence_number.wrapping_add(1);
         Ok(())
     }
@@ -348,42 +317,41 @@ where
     // pub kex_strict: bool,
 }
 
-impl<T> Deref for CipherStream<T>
-where
-    T: AsyncRead + AsyncWrite + Send,
-{
-    type Target = BufferStream<T>;
+// impl<T> Deref for CipherStream<T>
+// where
+//     T: AsyncRead + AsyncWrite + Send,
+// {
+//     type Target = BufferStream<T>;
 
-    fn deref(&self) -> &Self::Target {
-        &self.stream
-    }
-}
+//     fn deref(&self) -> &Self::Target {
+//         &self.stream
+//     }
+// }
 
-impl<T> DerefMut for CipherStream<T>
-where
-    T: AsyncRead + AsyncWrite + Send,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.stream
-    }
-}
+// impl<T> DerefMut for CipherStream<T>
+// where
+//     T: AsyncRead + AsyncWrite + Send,
+// {
+//     fn deref_mut(&mut self) -> &mut Self::Target {
+//         &mut self.stream
+//     }
+// }
 
 impl<T> CipherStream<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    pub async fn send_new_keys(&mut self) -> Result<()> {
-        self.send_payload(&[SSH_MSG_NEWKEYS]).await?;
-        if self.client.kex_strict && self.server.kex_strict {
-            self.client.sequence_number = 0;
-            self.server.sequence_number = 0;
-        }
-        Ok(())
-    }
+    // pub async fn send_new_keys(&mut self) -> Result<()> {
+    //     self.send_payload(&[SSH_MSG_NEWKEYS]).await?;
+    //     if self.client.kex_strict && self.server.kex_strict {
+    //         self.client.sequence_number = 0;
+    //         self.server.sequence_number = 0;
+    //     }
+    //     Ok(())
+    // }
 
     pub async fn recv_packet(&mut self) -> Result<Packet> {
         let mut func = |mut data: Buffer, mac: Option<Vec<u8>>| {
-            // let size = size.get_u32();
             let (len, data) = data.take_one()?;
 
             let mut data = Buffer::from_vec(data);
@@ -422,42 +390,37 @@ where
         let (packet_size, packet, mac) = if self.decrypt.has_aad() {
             let aad = self.stream.read_exact(4).await?;
 
-            cipher_text.extend(aad.clone());
+            let add_clone = aad.clone();
 
             let mut aad = Buffer::from_vec(aad);
             let size = aad.take_u32().unwrap();
-
             if size as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(
-                    "invalid packet length: {size}"
+                    "Invalid packet length: {size}"
                 )));
             }
 
             let left = self.stream.read_exact(size as usize).await?;
-            cipher_text.extend(left.clone());
 
             let mut plain_text = vec![];
 
-            aad.put_u32(size);
-            self.decrypt.update(aad.as_ref(), None)?;
+            self.decrypt.update(&add_clone, None)?;
 
             self.decrypt.update(&left, Some(&mut plain_text))?;
 
             let mac = if self.decrypt.has_tag() {
                 let tag = self.stream.read_exact(self.decrypt.tag_len()).await?;
+
                 self.decrypt.set_authentication_tag(&tag)?;
                 None
             } else {
                 let mac = self.stream.read_exact(mac_len).await?;
+                cipher_text.extend(add_clone);
+                cipher_text.extend(left);
                 Some(mac)
             };
 
             self.decrypt.finalize(&mut plain_text)?;
-
-            // self.decrypt.reset()?;
-            // println!("final: {res:?}");
-
-            // panic!("");
 
             (size, plain_text, mac)
         } else if self.server.mac.encrypt_then_mac() {
@@ -468,7 +431,7 @@ where
 
             if packet_len as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(
-                    "invalid packet length: {packet_len}"
+                    "Invalid packet length: {packet_len}"
                 )));
             }
 
@@ -494,14 +457,13 @@ where
             let mut buffer_first = Buffer::from_vec(out_size);
 
             // 所有block都大于等于8, 直接使用unwrap
-            let pakcet_size = buffer_first.take_u32().unwrap() as u32;
+            let pakcet_size = buffer_first.take_u32().unwrap();
 
             if pakcet_size as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(
-                    "invalid packet length: {pakcet_size}"
+                    "Invalid packet length: {pakcet_size}"
                 )));
             }
-            
 
             let left = self
                 .stream
@@ -566,8 +528,6 @@ where
     }
 
     pub async fn send_payload(&mut self, mut payload: &[u8]) -> Result<()> {
-        // let en = &mut self.encrypt;
-
         /*
           If compression has been negotiated, the 'payload' field (and only it)
            will be compressed using the negotiated algorithm.
@@ -577,14 +537,14 @@ where
         // let payload = payload.to_vec();
         let out;
         if compress {
-            self.encode.update(&payload)?;
+            self.encode.update(payload)?;
             out = self.encode.finalize()?;
             payload = &out;
         }
 
         let payload_len = payload.len();
         if payload_len > PAYLOAD_MAXIMUM_SIZE {
-            return Err(Error::ub(format!("payload is too long: {}", payload_len)));
+            return Err(Error::ub(format!("Payload is too long: {}", payload_len)));
         }
         // ( 4 + 1 + y + x) % 8 = 0
         // x = 8 - (4 + 1 + y + x) % 8
@@ -615,7 +575,7 @@ where
         }
 
         let mut padding_len = block_size - ((4 + 1 + payload_len - crypt_offset) % block_size);
-        if padding_len < 4 && padding_len != 0 {
+        if padding_len < 4 {
             padding_len += block_size;
         }
 
@@ -704,8 +664,8 @@ where
             cipher_text.extend(mac);
         }
 
-        self.socket.write(cipher_text.as_ref()).await?;
-        self.socket.flush().await?;
+        self.stream.write(cipher_text).await?;
+        self.stream.flush().await?;
 
         self.client.sequence_number = self.client.sequence_number.wrapping_add(1);
 

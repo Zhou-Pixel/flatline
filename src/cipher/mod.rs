@@ -58,6 +58,4 @@ where
 
 pub type Boxtory<T> = Box<dyn Factory<Box<T>> + Send + Sync>;
 
-
-trait Backend {
-}
+trait Backend {}

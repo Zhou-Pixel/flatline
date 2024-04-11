@@ -1,15 +1,16 @@
-use async_channel::Sender;
-use derive_new::new;
-use super::error::Result;
-use crate::ssh::buffer::Buffer;
-use super::sftp::SFtp;
 use super::channel::Channel;
+use super::error::Result;
+use super::sftp::SFtp;
 use super::ssh::common::code::*;
+use crate::ssh::buffer::Buffer;
+use derive_new::new;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
 #[derive(Debug)]
 pub enum Userauth {
     Success,
-    Failure(Vec<String>),
+    Failure(Vec<String>, bool),
     Expired,
 }
 
@@ -21,73 +22,72 @@ pub(crate) enum Request {
     UserAuthPassWord {
         username: String,
         password: String,
-        sender: Sender<Result<Userauth>>,
+        sender: oneshot::Sender<Result<Userauth>>,
     },
     UserauthPublickey {
         username: String,
         method: String,
         publickey: Vec<u8>,
         privatekey: Vec<u8>,
-        sender: Sender<Result<Userauth>>,
+        sender: oneshot::Sender<Result<Userauth>>,
     },
     UserauthNone {
         username: String,
-        sender: Sender<Result<Userauth>>,
+        sender: oneshot::Sender<Result<Userauth>>,
     },
     ChannelOpenSession {
         initial: u32,
         maximum: u32,
-        session: Sender<Request>,
-        sender: Sender<Result<Channel>>,
+        session: mpsc::Sender<Request>,
+        sender: oneshot::Sender<Result<Channel>>,
     },
     ChannelExec {
         id: u32,
         cmd: String,
-        sender: Sender<Result<()>>,
+        sender: oneshot::Sender<Result<()>>,
     },
     ChannelExecWait {
         id: u32,
         cmd: String,
-        sender: Sender<Result<ExitStatus>>,
+        sender: oneshot::Sender<Result<ExitStatus>>,
     },
     ChannelGetExitStatus {
         id: u32,
-        sender: Sender<Result<ExitStatus>>,
+        sender: oneshot::Sender<Result<ExitStatus>>,
     },
     ChannelDrop {
         id: u32,
-        sender: Option<Sender<Result<()>>>,
+        sender: Option<oneshot::Sender<Result<()>>>,
     },
     ChannelWriteStdout {
         id: u32,
         data: Vec<u8>,
-        sender: Sender<Result<bool>>,
+        sender: oneshot::Sender<Result<bool>>,
     },
     ChannelSetEnv {
         id: u32,
         name: String,
         value: Vec<u8>,
-        sender: Sender<Result<()>>,
+        sender: oneshot::Sender<Result<()>>,
     },
     ChannelSendSignal {
         id: u32,
         signal: Signal,
-        sender: Sender<Result<()>>,
+        sender: oneshot::Sender<Result<()>>,
     },
     ChannelEOF {
         id: u32,
-        sender: Sender<Result<()>>
+        sender: oneshot::Sender<Result<()>>,
     },
     ChannelFlushStdout {
         id: u32,
-        sender: Sender<Result<()>>,
+        sender: oneshot::Sender<Result<()>>,
     },
     SFtpOpen {
-        session: Sender<Request>,
-        sender: Sender<Result<SFtp>>,
+        session: mpsc::Sender<Request>,
+        sender: oneshot::Sender<Result<SFtp>>,
     },
 }
-
 
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq)]
@@ -166,7 +166,10 @@ pub(crate) enum Message {
         msg: String,
         tag: String,
     },
-    HostKeysOpenSsh(Vec<u8>),
+    HostKeysOpenSsh {
+        want_reply: bool,
+        hostkeys: Vec<Vec<u8>>,
+    },
     ChannelOpenFailure {
         recipient: u32,
         reson: ChannelOpenFailureReson,
@@ -219,7 +222,7 @@ pub(crate) enum Message {
         tag: String,
     },
     Ignore(Vec<u8>),
-    Ping(Vec<u8>)
+    Ping(Vec<u8>),
 }
 
 #[derive(Debug, Clone, new)]
@@ -229,6 +232,7 @@ pub enum ExitStatus {
         signal: Signal,
         core_dumped: bool,
         error_msg: String,
+        tag: String,
     },
 }
 
@@ -250,7 +254,6 @@ impl Message {
                 }
             };
             let code = buffer.take_u8()?;
-
             match code {
                 SSH_MSG_CHANNEL_OPEN_FAILURE => {
                     let recipient = buffer.take_u32()?;
@@ -273,7 +276,7 @@ impl Message {
                 SSH_MSG_USERAUTH_FAILURE => {
                     let (_, methods) = buffer.take_one()?;
 
-                    let methods = utf8(&methods)?.split(",").map(|v| v.to_owned()).collect();
+                    let methods = utf8(&methods)?.split(',').map(|v| v.to_owned()).collect();
 
                     let partial = buffer.take_u8()? != 0;
 
@@ -304,7 +307,16 @@ impl Message {
                     let line = buffer.take_bytes(len as usize)?;
 
                     if line == b"hostkeys-00@openssh.com" {
-                        Some(Self::HostKeysOpenSsh(line))
+                        let want_reply = buffer.take_u8()? != 0;
+
+                        let mut hostkeys = vec![];
+                        while buffer.len() != 0 {
+                            hostkeys.push(buffer.take_one()?.1);
+                        }
+                        Some(Self::HostKeysOpenSsh {
+                            want_reply,
+                            hostkeys,
+                        })
                     } else {
                         detail = format!("unknown global reqeust: {:?}", utf8(&line)?);
                         // Err(Error::ssh_packet_parse(format!(
@@ -318,7 +330,6 @@ impl Message {
                     let recipient = buffer.take_u32()?;
 
                     let (_, data) = buffer.take_one()?;
-
                     Some(Self::ChannelStdoutData { recipient, data })
                 }
                 SSH_MSG_CHANNEL_EXTENDED_DATA => {

@@ -3,7 +3,6 @@ use derive_new::new;
 
 use crate::{cipher::crypt::Decrypt, error::Result, Boxtory};
 
-
 #[derive(new)]
 pub struct PrivateKey {
     pub key_type: String,

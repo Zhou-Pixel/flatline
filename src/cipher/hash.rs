@@ -43,4 +43,3 @@ impl Hash for MdWrapper {
         Ok(out)
     }
 }
-

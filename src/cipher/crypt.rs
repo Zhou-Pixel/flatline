@@ -99,6 +99,7 @@ impl Gcm {
             (Some(key), Some(iv)) => {
                 assert_eq!(iv.len(), 12);
                 if self.increase_iv {
+                    // let u64 = BigEndian::read_u64(&iv[4..]).wrapping_add(1);
                     for i in (4..12).rev() {
                         iv[i] = iv[i].wrapping_add(1);
                         if iv[i] != 0 {
@@ -110,7 +111,7 @@ impl Gcm {
                 self.ctx = Some(ctx);
                 Ok(())
             }
-            _ => Err(Error::ub("uninitlize")),
+            _ => Err(Error::ub("Uninitlize")),
         }
     }
 }

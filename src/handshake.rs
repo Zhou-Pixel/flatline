@@ -1,7 +1,5 @@
-use derive_new::new;
-use indexmap::IndexMap;
-use openssl::rand::rand_bytes;
-use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(not(feature = "async-compatible"))]
+use std::future::Future;
 
 use super::cipher::hash::Hash;
 use super::cipher::kex::Summary as DHSumary;
@@ -15,10 +13,15 @@ use crate::cipher::kex::{self, KeyExChange};
 use crate::cipher::mac::{self, Mac};
 use crate::cipher::sign::{self, Verify};
 use crate::handshake::code::*;
+use crate::msg::DisconnectReson;
 use crate::project;
 use crate::ssh::buffer::Buffer;
+use derive_new::new;
+use indexmap::IndexMap;
+use openssl::rand::rand_bytes;
+use tokio::io::{AsyncRead, AsyncWrite};
 
-pub struct Config {
+pub struct Config<B> {
     pub(crate) banner: String, //
     pub key_exchange: IndexMap<String, Boxtory<dyn KeyExChange + Send>>,
     pub hostkey: IndexMap<String, Boxtory<dyn Verify + Send>>,
@@ -29,10 +32,114 @@ pub struct Config {
     pub compress_client_to_server: IndexMap<String, Boxtory<dyn Encode + Send>>,
     pub compress_server_to_client: IndexMap<String, Boxtory<dyn Decode + Send>>,
     pub key_strict: bool,
+    pub behavior: Option<B>,
     pub(crate) ext: bool,
 }
 
-impl Default for Config {
+#[cfg(not(feature = "async-compatible"))]
+pub trait Behavior {
+    fn openssh_hostkeys(
+        &mut self,
+        want_reply: bool,
+        hostkeys: &[&[u8]],
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn debug(
+        &mut self,
+        always_display: bool,
+        msg: &str,
+        tag: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn ignore(&mut self, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
+    fn useauth_banner(&mut self, msg: &str, tag: &str) -> impl Future<Output = Result<()>> + Send;
+    fn disconnect(
+        &mut self,
+        reson: DisconnectReson,
+        dest: &str,
+        tag: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn verify_server_hostkey(
+        &mut self,
+        keytype: &str,
+        hostkeys: &[u8],
+    ) -> impl Future<Output = Result<bool>> + Send;
+}
+
+#[cfg(feature = "async-compatible")]
+#[async_trait::async_trait]
+pub trait Behavior {
+    async fn openssh_hostkeys(&mut self, want_reply: bool, hostkeys: &[&[u8]]) -> Result<()>;
+    async fn debug(&mut self, always_display: bool, msg: &str, tag: &str) -> Result<()>;
+    async fn ignore(&mut self, data: &[u8]) -> Result<()>;
+    async fn useauth_banner(&mut self, msg: &str, tag: &str) -> Result<()>;
+    async fn disconnect(&mut self, reson: DisconnectReson, dest: &str, tag: &str) -> Result<()>;
+    async fn verify_server_hostkey(&mut self, keytype: &str, hostkeys: &[u8]) -> Result<bool>;
+}
+
+impl Config<DefaultBehavior> {
+    pub fn deafult_with_behavior() -> Self {
+        Self::default()
+    }
+}
+
+#[derive(Default)]
+pub struct DefaultBehavior;
+
+#[cfg(not(feature = "async-compatible"))]
+impl Behavior for DefaultBehavior {
+    async fn openssh_hostkeys(&mut self, _: bool, _: &[&[u8]]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn debug(&mut self, _: bool, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn ignore(&mut self, _: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn disconnect(&mut self, _: DisconnectReson, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn verify_server_hostkey(&mut self, _: &str, _: &[u8]) -> Result<bool> {
+        Ok(true)
+    }
+
+    async fn useauth_banner(&mut self, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "async-compatible")]
+#[async_trait::async_trait]
+impl Behavior for DefaultBehavior {
+    async fn openssh_hostkeys(&mut self, _: bool, _: &[&[u8]]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn debug(&mut self, _: bool, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn ignore(&mut self, _: &[u8]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn disconnect(&mut self, _: DisconnectReson, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn verify_server_hostkey(&mut self, _: &str, _: &[u8]) -> Result<bool> {
+        Ok(true)
+    }
+
+    async fn useauth_banner(&mut self, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<B> Default for Config<B> {
     fn default() -> Self {
         fn convert<K: ToString, V>(value: IndexMap<K, V>) -> IndexMap<String, V> {
             value.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
@@ -54,12 +161,13 @@ impl Default for Config {
             compress_client_to_server: convert(compress::new_encode_all()),
             compress_server_to_client: convert(compress::new_decode_all()),
             key_strict: true,
+            behavior: None,
             ext: false,
         }
     }
 }
 
-impl Config {
+impl<B> Config<B> {
     pub fn disable_compress(&mut self) {
         self.compress_client_to_server.clear();
         self.compress_server_to_client.clear();
@@ -103,7 +211,7 @@ pub(crate) struct Summary {
     pub methods: Methods,
 }
 
-#[derive(new)]
+#[derive(new, Debug)]
 pub(crate) struct Methods {
     pub kex: Vec<String>,
     pub host_key: Vec<String>,
@@ -120,7 +228,7 @@ pub(crate) struct Methods {
 }
 
 impl Methods {
-    fn from_config(config: &Config) -> Self {
+    fn from_config<B: Behavior>(config: &Config<B>) -> Self {
         fn convert(methods: impl IntoIterator<Item = impl ToString>) -> Vec<String> {
             methods.into_iter().map(|v| v.to_string()).collect()
         }
@@ -149,45 +257,45 @@ pub(crate) struct MethodExchange {
     // algo: Algorithm,
 }
 
-pub(crate) async fn method_exchange(
+pub(crate) async fn method_exchange<B: Behavior>(
     stream: &mut dyn Stream,
-    config: &Config,
+    config: &Config<B>,
 ) -> Result<MethodExchange> {
     let invalid_arg = |str: &str| Err(Error::InvalidArgument(str.to_string()));
     if config.compress_client_to_server.is_empty() {
         return invalid_arg(
-            "compress client to server is empty, 'none' should be provided at least",
+            "Compress client to server is empty, 'none' should be provided at least",
         );
     }
 
     if config.compress_server_to_client.is_empty() {
         return invalid_arg(
-            "compress_server_to_client is empty, 'none' should be provided at least",
+            "Compress_server_to_client is empty, 'none' should be provided at least",
         );
     }
 
     if config.crypt_client_to_server.is_empty() {
-        return invalid_arg("crypt client to server is empty");
+        return invalid_arg("Crypt client to server is empty");
     }
 
     if config.crypt_server_to_client.is_empty() {
-        return invalid_arg("crypt server to client is empty");
+        return invalid_arg("Crypt server to client is empty");
     }
 
     if config.mac_client_to_server.is_empty() {
-        return invalid_arg("mac client to server is empty");
+        return invalid_arg("Mac client to server is empty");
     }
 
     if config.mac_server_to_client.is_empty() {
-        return invalid_arg("mac server to client is empty");
+        return invalid_arg("Mac server to client is empty");
     }
 
     if config.hostkey.is_empty() {
-        return invalid_arg("hostkey is empty");
+        return invalid_arg("Hostkey is empty");
     }
 
     if config.key_exchange.is_empty() {
-        return invalid_arg("key exhange is empty");
+        return invalid_arg("Key exhange is empty");
     }
 
     let client_methods = Methods::from_config(config);
@@ -229,7 +337,9 @@ pub(crate) async fn method_exchange(
     let reply = stream.recv_packet().await?;
 
     if reply.payload.is_empty() || reply.payload[0] != SSH_MSG_KEXINIT {
-        return Err(Error::ProtocolError("Failed to receive kex msg".to_string()));
+        return Err(Error::ProtocolError(
+            "Failed to receive kex msg".to_string(),
+        ));
     }
 
     let parser = || {
@@ -278,7 +388,6 @@ pub(crate) async fn method_exchange(
             kex_strict,
             ext,
         );
-        drop(get);
 
         let _ = reply.take_u8()?;
         let _ = reply.take_bytes(4)?;
@@ -286,17 +395,7 @@ pub(crate) async fn method_exchange(
         Some(methods)
     };
 
-    // println!("reply: {} {}", reply.payload.len(), reply.len);
-    // let kex_reply = packet::KexInit::from_bytes(&reply.payload[1..], false)?;
-
-    // self.server.ext = kex_reply.ext;
-
-    // Ok(MethodExchange {
-    //     client: (payload, kex),
-    //     server: (reply.payload, kex_reply),
-    //     // algo: self.match_method(&kex, &kex_reply, config)?,
-    // })
-    let server_methods = parser().ok_or(Error::invalid_format("invalid packet"))?;
+    let server_methods = parser().ok_or(Error::invalid_format("Invalid packet"))?;
 
     let client = Summary::new(buffer.into_vec(), client_methods);
     let server = Summary::new(reply.payload, server_methods);
@@ -386,10 +485,10 @@ impl Algorithm {
 }
 
 // todo: ignore mac when cipher has tag
-pub(crate) fn match_method(
+pub(crate) fn match_method<B: Behavior>(
     client: &Methods,
     server: &Methods,
-    config: &Config,
+    config: &Config<B>,
 ) -> Result<Algorithm> {
     let mut kex = None;
     let mut hostkey = None;
@@ -530,7 +629,9 @@ pub(crate) async fn new_keys(stream: &mut dyn Stream) -> Result<()> {
     stream.send_new_keys().await?;
     let packet = stream.recv_packet().await?;
     if packet.payload[0] != SSH_MSG_NEWKEYS {
-        Err(Error::ProtocolError("Failed to receive new keys".to_string()))
+        Err(Error::ProtocolError(
+            "Failed to receive new keys".to_string(),
+        ))
     } else {
         Ok(())
     }

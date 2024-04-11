@@ -109,7 +109,6 @@ algo_list!(
     ),
 );
 
-
 pub fn none() -> Boxtory<dyn Mac + Send> {
     create_boxtory!(Never {})
 }
@@ -209,12 +208,11 @@ impl Mac for HMac {
         ctx.digest_sign_final(Some(&mut buf))?;
         buf.truncate(self.mac_len);
 
-        // self.ctx = MdCtx::new()?;
-
-        ctx.reset()?;
+        let mut ctx = MdCtx::new()?;
         if let Some(ref pkey) = self.key {
             ctx.digest_sign_init(Some(self.digest), pkey)?;
         }
+        self.ctx = Some(ctx);
         Ok(buf)
     }
 }

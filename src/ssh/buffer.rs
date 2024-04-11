@@ -1,17 +1,20 @@
-use std::{mem::size_of, ops::{Index, IndexMut}, slice::SliceIndex, vec::IntoIter};
+use std::{
+    mem::size_of,
+    ops::{Index, IndexMut},
+    slice::SliceIndex,
+    vec::IntoIter,
+};
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BE};
-
-
 
 // todo: Improve performance
 #[derive(Default, Clone, Debug)]
 #[repr(transparent)]
 pub struct Buffer(Vec<u8>);
 
-impl Into<Vec<u8>> for Buffer {
-    fn into(self) -> Vec<u8> {
-        self.into_vec()
+impl From<Buffer> for Vec<u8> {
+    fn from(value: Buffer) -> Self {
+        value.into_vec()
     }
 }
 
@@ -68,15 +71,13 @@ impl IntoIterator for Buffer {
 //     }
 // }
 
-
 impl Buffer {
     pub fn from_one(content: impl AsRef<[u8]>) -> Self {
-
         let content = content.as_ref();
         let mut vec = Vec::with_capacity(content.len() + size_of::<u32>());
         let mut size = [0u8; size_of::<u32>()];
         size.as_mut().write_u32::<BE>(content.len() as u32).unwrap();
-        
+
         vec.extend(size);
         vec.extend(content);
         Self(vec)
@@ -89,15 +90,12 @@ impl Buffer {
         Buffer(vec)
     }
 
-    
     pub fn put_u64(&mut self, num: u64) {
-
         let mut buf = [0; size_of::<u64>()];
 
         buf.as_mut().write_u64::<BE>(num).unwrap();
 
         self.0.extend(buf);
-
     }
 
     pub fn put_u32(&mut self, num: u32) {
@@ -107,18 +105,15 @@ impl Buffer {
         self.0.extend(buf);
     }
 
-
     pub fn put_u8(&mut self, num: u8) {
         self.0.push(num);
     }
-
 
     pub fn into_vec(self) -> Vec<u8> {
         self.0
     }
 
     pub fn take_u64(&mut self) -> Option<u64> {
-
         let mut buf: &[u8] = &self.0;
         let Ok(num) = ReadBytesExt::read_u64::<BE>(&mut buf) else {
             return None;
@@ -130,23 +125,18 @@ impl Buffer {
     }
 
     pub fn take_u32(&mut self) -> Option<u32> {
-
         let mut buf: &[u8] = &self.0;
 
         let Ok(num) = ReadBytesExt::read_u32::<BE>(&mut buf) else {
             return None;
         };
 
-
         self.0.drain(..size_of::<u32>());
 
         Some(num)
-
-        
     }
 
     pub fn take_u8(&mut self) -> Option<u8> {
-
         if self.0.is_empty() {
             None
         } else {
@@ -154,7 +144,6 @@ impl Buffer {
         }
         // self.take_bytes(1).map(|v| v[0])
     }
-
 
     pub fn take_bytes(&mut self, size: usize) -> Option<Vec<u8>> {
         if self.0.len() < size {
@@ -164,31 +153,27 @@ impl Buffer {
         }
     }
 
-
     pub fn take_one(&mut self) -> Option<(u32, Vec<u8>)> {
-
         if self.0.len() < size_of::<u32>() {
             return None;
         }
 
         let mut buf: &[u8] = &self.0;
 
-        let Ok(size) = ReadBytesExt::read_u32::<BE>(&mut buf) else { return None; };
+        let Ok(size) = ReadBytesExt::read_u32::<BE>(&mut buf) else {
+            return None;
+        };
 
         if buf.len() < size as usize {
             return None;
         }
 
-
         self.0.drain(0..4); // remove size 4 bytes
 
-
         Some((size, self.0.drain(0..size as usize).collect()))
-
     }
 
     pub fn put_bytes(&mut self, bytes: impl AsRef<[u8]>) {
-        
         self.0.extend(bytes.as_ref());
     }
 
@@ -205,6 +190,8 @@ impl Buffer {
     pub fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
         self.0.extend(other);
     }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
 }
-
-

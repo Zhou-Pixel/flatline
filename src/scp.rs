@@ -1,9 +1,7 @@
-
-use derive_new::new;
 use super::error::Result;
+use derive_new::new;
 
 use super::channel::Channel;
-
 
 #[derive(new)]
 pub struct Sender {
