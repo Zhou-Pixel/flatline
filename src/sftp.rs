@@ -38,17 +38,21 @@ bitflags! {
     }
 }
 
-#[derive(new)]
 pub struct SFtp {
-    // session: Sender<Request>,
-    // id: u32,
     channel: Channel,
-
-    #[new(default)]
     request_id: u32,
     version: u32,
-    // recver: Receiver<Vec<u8>>,
     ext: HashMap<String, Vec<u8>>,
+}
+impl SFtp {
+    pub(crate) fn new(channel: Channel, version: u32, ext: HashMap<String, Vec<u8>>) -> Self {
+        Self {
+            channel,
+            request_id: 0,
+            version,
+            ext
+        }
+    }
 }
 
 pub struct File {
@@ -391,7 +395,7 @@ impl SFtp {
         self.version
     }
 
-    pub async fn flush(&mut self) -> Result<()> {
+    pub async fn flush(&self) -> Result<()> {
         self.channel.flush().await
     }
 

@@ -55,7 +55,7 @@ impl Channel {
         }
     }
 
-    pub async fn flush(&mut self) -> Result<()> {
+    pub async fn flush(&self) -> Result<()> {
         let (sender, recver) = oneshot::channel();
         let request = Request::ChannelFlushStdout {
             id: self.id,
@@ -128,7 +128,7 @@ impl Channel {
         res
     }
 
-    pub async fn send_signal(&mut self, signal: Signal) -> Result<()> {
+    pub async fn send_signal(&self, signal: Signal) -> Result<()> {
         let (sender, recver) = oneshot::channel();
         let request = Request::ChannelSendSignal {
             id: self.id,
@@ -142,7 +142,7 @@ impl Channel {
     }
 
     pub async fn set_env(
-        &mut self,
+        &self,
         name: impl Into<String>,
         value: impl Into<Vec<u8>>,
     ) -> Result<()> {
@@ -174,7 +174,7 @@ impl Channel {
         recver.await.map_err(|_| Error::Disconnect)?
     }
 
-    pub async fn exec_and_wait(&mut self, cmd: impl Into<String>) -> Result<ExitStatus> {
+    pub async fn exec_and_wait(&self, cmd: impl Into<String>) -> Result<ExitStatus> {
         let (sender, recver) = oneshot::channel();
 
         let request = Request::ChannelExecWait {
@@ -188,7 +188,7 @@ impl Channel {
         recver.await.map_err(|_| Error::Disconnect)?
     }
 
-    pub async fn exit_status(&mut self) -> Result<ExitStatus> {
+    pub async fn exit_status(&self) -> Result<ExitStatus> {
         let (sender, recver) = oneshot::channel();
         let request = Request::ChannelGetExitStatus {
             id: self.id,
@@ -215,7 +215,7 @@ impl Channel {
         self.stderr.read().await
     }
 
-    pub async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<bool> {
+    pub async fn write(&self, data: impl Into<Vec<u8>>) -> Result<bool> {
         let data: Vec<u8> = data.into();
         let (sender, recver) = oneshot::channel();
         let request = Request::ChannelWriteStdout {
@@ -229,7 +229,7 @@ impl Channel {
         recver.await.map_err(|_| Error::Disconnect)?
     }
 
-    pub async fn eof(&mut self) -> Result<()> {
+    pub async fn eof(&self) -> Result<()> {
         let (sender, recver) = oneshot::channel();
         let request = Request::ChannelEOF {
             id: self.id,
