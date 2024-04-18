@@ -1,5 +1,7 @@
-# SSH-2.0 client library
+SSH-2.0 client library
+=====
 
+[![Latest version](https://img.shields.io/crates/v/flatline.svg)](https://crates.io/crates/flatline)  ![License](https://img.shields.io/crates/l/flatline.svg)
 
 ### Algorithms in flatline
 - **kex**
@@ -63,11 +65,12 @@
 ```rust
 #[tokio::main]
 async fn main() {
-    use flatline::session::{Session, Userauth};
+    use flatline::session::Session;
     use flatline::handshake::Config;
     use tokio::net::TcpStream;
+    use flatline::msg::{Userauth, ExitStatus};
     let socket = TcpStream::connect("192.168.8.190:22").await.unwrap();
-    let config = Config::default();
+    let config = Config::deafult_with_behavior();
     let mut session = Session::handshake(config, socket).await.unwrap();
 
     let status = session.userauth_password("zhou", "123456").await.unwrap();
@@ -76,7 +79,7 @@ async fn main() {
 
     let mut channel = session.channel_open_default().await.unwrap();
     let status = channel.exec_and_wait("echo \"hello\"").await.unwrap();
-    assert!(matches!(status, flatline::session::ExitStatus::Normal(0)));
+    assert!(matches!(status, ExitStatus::Normal(0)));
     let buf = channel.read().await.unwrap();
     assert_eq!(buf, b"hello\n");
 }
