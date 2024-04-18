@@ -6,6 +6,7 @@ use derive_new::new;
 
 use crate::channel::Channel;
 use crate::error::Result;
+use crate::ssh::common::*;
 use crate::{
     error::Error,
     ssh::{buffer::Buffer, common::code::*},
@@ -38,19 +39,57 @@ bitflags! {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Statvfs {
+    pub bsize: u64,
+    pub frsize: u64,
+    pub blocks: u64,
+    pub bfree: u64,
+    pub bavail: u64,
+    pub files: u64,
+    pub ffree: u64,
+    pub favail: u64,
+    pub fsid: u64,
+    pub flag: u64,
+    pub namemax: u64,
+}
+
+impl Statvfs {
+    pub const FLAG_RDONLY: u64 = 0x1;
+    pub const FLAG_NOSUID: u64 = 0x2;
+    fn parse(data: &[u8]) -> Option<Self> {
+        let mut buffer = Buffer::from_vec(data.to_vec());
+
+        Some(Self {
+            bsize: buffer.take_u64()?,
+            frsize: buffer.take_u64()?,
+            blocks: buffer.take_u64()?,
+            bfree: buffer.take_u64()?,
+            bavail: buffer.take_u64()?,
+            files: buffer.take_u64()?,
+            ffree: buffer.take_u64()?,
+            favail: buffer.take_u64()?,
+            fsid: buffer.take_u64()?,
+            flag: buffer.take_u64()?,
+            namemax: buffer.take_u64()?,
+        })
+    }
+}
+
 pub struct SFtp {
     channel: Channel,
     request_id: u32,
     version: u32,
     ext: HashMap<String, Vec<u8>>,
 }
+
 impl SFtp {
     pub(crate) fn new(channel: Channel, version: u32, ext: HashMap<String, Vec<u8>>) -> Self {
         Self {
             channel,
             request_id: 0,
             version,
-            ext
+            ext,
         }
     }
 }
@@ -159,6 +198,7 @@ impl Attributes {
         buffer.put_u32(flags);
         buffer.put_bytes(tmp);
     }
+
     fn parse(buffer: &mut Buffer) -> Option<Self> {
         let flags = buffer.take_u32()?;
 
@@ -211,6 +251,27 @@ pub struct FileInfo {
     pub filename: String,
     pub longname: String,
     pub attrs: Attributes,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub max_packet_len: u64,
+    pub max_read_len: u64,
+    pub max_write_len: u64,
+    pub max_open_handles: u64,
+}
+
+impl Limits {
+    fn parse(data: &[u8]) -> Option<Self> {
+        let mut buffer = Buffer::from_vec(data.to_vec());
+
+        Some(Self {
+            max_packet_len: buffer.take_u64()?,
+            max_read_len: buffer.take_u64()?,
+            max_write_len: buffer.take_u64()?,
+            max_open_handles: buffer.take_u64()?,
+        })
+    }
 }
 
 struct Packet {
@@ -270,6 +331,7 @@ impl Packet {
                 Message::Name(res)
             }
             SSH_FXP_ATTRS => Message::Attributes(Attributes::parse(&mut data)?),
+            SSH_FXP_EXTENDED_REPLY => Message::ExtendReply(data.into_vec()),
             _ => return None,
         };
 
@@ -307,19 +369,19 @@ impl Status {
         })
     }
 
-    // fn to_result<T: Default>(&self, msg: String) -> Result<T> {
-    //     match self {
-    //         Status::OK => Ok(Default::default()),
-    //         Status::EOF => Ok(Default::default()),
-    //         Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
-    //         Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-    //         Status::FAILURE => Err(Error::SFtpFailure(msg)),
-    //         Status::BadMessage => Err(Error::BadMessage(msg)),
-    //         Status::NoConnection => Err(Error::NoConnection(msg)),
-    //         Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
-    //         Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
-    //     }
-    // }
+    fn to_result<T: Default>(&self, msg: String) -> Result<T> {
+        match self {
+            Status::OK => Ok(Default::default()),
+            Status::Eof => Ok(Default::default()),
+            Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
+            Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
+            Status::Failure => Err(Error::SFtpFailure(msg)),
+            Status::BadMessage => Err(Error::BadMessage(msg)),
+            Status::NoConnection => Err(Error::NoConnection(msg)),
+            Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
+            Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
+        }
+    }
 
     fn no_ok_and_eof<T>(&self, msg: String) -> Result<T> {
         match self {
@@ -382,6 +444,7 @@ enum Message {
     Data(Vec<u8>),
     Name(Vec<FileInfo>),
     Attributes(Attributes),
+    ExtendReply(Vec<u8>),
 }
 
 impl SFtp {
@@ -397,6 +460,304 @@ impl SFtp {
 
     pub async fn flush(&self) -> Result<()> {
         self.channel.flush().await
+    }
+
+    pub fn support_posix_rename(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_POSIX_RENAME)
+    }
+
+    pub async fn posix_rename(&mut self, oldpath: &str, newpath: &str) -> Result<()> {
+        let mut buffer = Buffer::new();
+
+        let request_id = self.genarate_request_id();
+
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_POSIX_RENAME.0);
+        buffer.put_one(oldpath);
+        buffer.put_one(newpath);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        self.wait_for_status(request_id, Status::no_eof).await
+    }
+
+    pub fn support_fstatvfs(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_FSTATVFS)
+    }
+
+    pub async fn fstatvfs(&mut self, file: &File) -> Result<Statvfs> {
+        debug_assert!(self.support_fstatvfs(), "Server doesn't support fstatvfs");
+
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_FSTATVFS.0);
+        buffer.put_one(&file.handle);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let packet = self.wait_for_packet(request_id).await?;
+
+        match packet.msg {
+            Message::Status { status, msg, _tag } => status.no_ok_and_eof(msg),
+            Message::ExtendReply(data) => Statvfs::parse(&data)
+                .ok_or(Error::ProtocolError("Invalid Statvfs Message".to_string())),
+            _ => Err(Error::ProtocolError("Unexpected SFtp Message".to_string())),
+        }
+    }
+
+    pub fn support_statvfs(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_STATVFS)
+    }
+
+    pub async fn statvfs(&mut self, path: &str) -> Result<Statvfs> {
+        debug_assert!(self.support_fstatvfs(), "Server doesn't support statvfs");
+
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_STATVFS.0);
+        buffer.put_one(path);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let packet = self.wait_for_packet(request_id).await?;
+
+        match packet.msg {
+            Message::Status { status, msg, _tag } => status.no_ok_and_eof(msg),
+            Message::ExtendReply(data) => Statvfs::parse(&data)
+                .ok_or(Error::ProtocolError("Invalid Statvfs Message".to_string())),
+            _ => Err(Error::ProtocolError("Unexpected SFtp Message".to_string())),
+        }
+    }
+
+    pub fn support_hardlink(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_HARDLINK)
+    }
+
+    pub async fn hardlink(&mut self, oldpath: &str, newpath: &str) -> Result<()> {
+        debug_assert!(self.support_hardlink(), "Server doesn't support hardlink");
+
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_HARDLINK.0);
+        buffer.put_one(oldpath);
+        buffer.put_one(newpath);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        self.wait_for_status(request_id, Status::no_eof).await
+    }
+
+    pub fn support_fsync(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_FSYNC)
+    }
+
+    pub async fn fsync(&mut self, file: &File) -> Result<()> {
+        debug_assert!(self.support_fsync(), "Server doesn't support fsync");
+
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_FSYNC.0);
+        buffer.put_one(&file.handle);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        self.wait_for_status(request_id, Status::no_eof).await
+    }
+
+    pub fn support_lsetstat(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_LSETSTAT)
+    }
+
+    pub async fn lsetstat(&mut self, path: &str, attrs: &Attributes) -> Result<()> {
+        debug_assert!(self.support_lsetstat(), "Server doesn't lsetstat");
+
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_LSETSTAT.0);
+        buffer.put_one(path);
+        attrs.to_bytes(&mut buffer);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        self.wait_for_status(request_id, Status::no_eof).await
+    }
+
+    pub fn support_limits(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_LIMITS)
+    }
+
+    pub async fn limits(&mut self) -> Result<Limits> {
+        debug_assert!(self.support_limits(), "Server doesn't support limits");
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_one(OPENSSH_SFTP_EXT_LIMITS.0);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let packet = self.wait_for_packet(request_id).await?;
+
+        match packet.msg {
+            Message::ExtendReply(data) => Limits::parse(&data)
+                .ok_or(Error::ProtocolError("Invalid packet format".to_string())),
+            _ => Err(Error::ProtocolError(
+                "Unexpect message from server".to_string(),
+            )),
+        }
+    }
+
+    pub fn support_expand_path(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_EXPAND_PATH)
+    }
+
+    pub async fn expand_path(&mut self, path: &str) -> Result<String> {
+        debug_assert!(
+            self.support_expand_path(),
+            "Server doesn't support expand path"
+        );
+
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_EXPAND_PATH.0);
+        buffer.put_one(path);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let packet = self.wait_for_packet(request_id).await?;
+
+        match packet.msg {
+            Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
+            Message::Name(infos) if infos.len() == 1 => Ok(infos[0].filename.clone()),
+            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+        }
+    }
+
+    pub fn support_copy_data(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_COPY_DATA)
+    }
+
+    pub async fn copy_data(&mut self, read: &mut File, len: u64, write: &mut File) -> Result<()> {
+        debug_assert!(self.support_copy_data(), "Server doesn't support copy data");
+
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_COPY_DATA.0);
+        buffer.put_one(&read.handle);
+        buffer.put_u64(read.pos);
+        buffer.put_u64(len);
+        buffer.put_one(&write.handle);
+        buffer.put_u64(write.pos);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let status = self.wait_for_status(request_id, Status::to_result).await;
+
+        if status.is_ok() {
+            read.pos += len;
+            write.pos += len;
+        }
+
+        status
+    }
+
+    pub fn support_home_directory(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_HOME_DIRECTORY)
+    }
+
+    pub async fn home_directory(&mut self, username: &str) -> Result<String> {
+        debug_assert!(
+            self.support_home_directory(),
+            "Server doesn't support home directory"
+        );
+
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_HOME_DIRECTORY.0);
+        buffer.put_one(username);
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let packet = self.wait_for_packet(request_id).await?;
+
+        match packet.msg {
+            Message::Status { status, msg, _tag } => status.no_ok_and_eof(msg),
+            Message::Name(infos) if infos.len() == 1 => Ok(infos[0].filename.clone()),
+            _ => Err(Error::ProtocolError("Unexpected message".to_string())),
+        }
+    }
+
+    pub fn support_users_groups_by_id(&self) -> bool {
+        self.support(OPENSSH_SFTP_EXT_USERS_GROUPS_BY_ID)
+    }
+
+    pub async fn users_groups_by_id(
+        &mut self,
+        users: &[u32],
+        groups: &[u32],
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let request_id = self.genarate_request_id();
+        let mut buffer = Buffer::new();
+        buffer.put_u32(request_id);
+        buffer.put_one(OPENSSH_SFTP_EXT_USERS_GROUPS_BY_ID.0);
+
+        buffer.put_u32((users.len() * 4) as u32);
+
+        users.iter().for_each(|v| {
+            buffer.put_u32(*v);
+        });
+
+        buffer.put_u32((groups.len() * 4) as u32);
+
+        groups.iter().for_each(|v| {
+            buffer.put_u32(*v);
+        });
+
+        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let packet = self.wait_for_packet(request_id).await?;
+
+        match packet.msg {
+            Message::ExtendReply(data) => {
+                let mut buffer = Buffer::from_vec(data);
+                let usernames = buffer
+                    .take_one()
+                    .ok_or(Error::ProtocolError(
+                        "Invalid sftp packet format".to_string(),
+                    ))?
+                    .1;
+                let mut usernames = Buffer::from_vec(usernames);
+
+                let groupnames = buffer
+                    .take_one()
+                    .ok_or(Error::ProtocolError(
+                        "Invalid sftp packet format".to_string(),
+                    ))?
+                    .1;
+                let mut groupnames = Buffer::from_vec(groupnames);
+
+                let mut unames = vec![];
+                while let Some(user) = usernames.take_one() {
+                    unames.push(String::from_utf8(user.1)?);
+                }
+
+                let mut gnames = vec![];
+
+                while let Some(group) = groupnames.take_one() {
+                    gnames.push(String::from_utf8(group.1)?)
+                }
+
+                Ok((unames, gnames))
+            }
+            _ => Err(Error::ProtocolError("Unexpected message".to_string())),
+        }
+    }
+
+    fn support(&self, (e, v): (&str, &[u8])) -> bool {
+        self.ext.get(e).map(|v| v.as_ref()) == Some(v)
     }
 
     // pub async fn close(mut self) -> Result<()> {
@@ -676,7 +1037,7 @@ impl SFtp {
         }
     }
 
-    pub async fn set_stat(&mut self, path: &str, attrs: &Attributes) -> Result<()> {
+    pub async fn setstat(&mut self, path: &str, attrs: &Attributes) -> Result<()> {
         let request_id = self.genarate_request_id();
 
         let mut buffer = Buffer::new();
@@ -690,7 +1051,7 @@ impl SFtp {
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
-    pub async fn set_fstat(&mut self, file: &File, attrs: &Attributes) -> Result<()> {
+    pub async fn setfstat(&mut self, file: &File, attrs: &Attributes) -> Result<()> {
         let request_id = self.genarate_request_id();
 
         let mut buffer = Buffer::new();
@@ -704,7 +1065,7 @@ impl SFtp {
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
-    pub async fn read_link(&mut self, path: &str) -> Result<FileInfo> {
+    pub async fn readlink(&mut self, path: &str) -> Result<FileInfo> {
         let request_id = self.genarate_request_id();
 
         let mut buffer = Buffer::new();
@@ -735,7 +1096,7 @@ impl SFtp {
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
-    pub async fn real_path(&mut self, path: &str) -> Result<String> {
+    pub async fn realpath(&mut self, path: &str) -> Result<String> {
         let request_id = self.genarate_request_id();
 
         let mut buffer = Buffer::new();

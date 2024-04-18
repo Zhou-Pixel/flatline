@@ -10,7 +10,6 @@ use super::msg::ExitStatus;
 
 use super::error::{Error, Result};
 use super::msg::Request;
-// use super::SubSystem;
 
 pub struct Channel {
     id: u32,
@@ -64,7 +63,15 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnected)?
+    }
+
+    pub async fn is_server_closed(&self) -> bool {
+        self.stdout.is_closed().await
+    }
+
+    pub async fn is_server_eof(&self) -> bool {
+        self.stdout.is_eof().await
     }
 
     pub async fn scp_sender(
@@ -118,7 +125,7 @@ impl Channel {
             sender: Some(sender),
         })
         .await?;
-        recver.await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnected)?
     }
 
     pub async fn close(mut self) -> Result<()> {
@@ -141,11 +148,7 @@ impl Channel {
         recver.await.map_err(|_| Error::ChannelClosed)?
     }
 
-    pub async fn set_env(
-        &self,
-        name: impl Into<String>,
-        value: impl Into<Vec<u8>>,
-    ) -> Result<()> {
+    pub async fn set_env(&self, name: impl Into<String>, value: impl Into<Vec<u8>>) -> Result<()> {
         let name = name.into();
         let value = value.into();
         let (sender, recver) = oneshot::channel();
@@ -158,7 +161,7 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnected)?
     }
 
     pub async fn exec(&self, cmd: impl Into<String>) -> Result<()> {
@@ -171,7 +174,7 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnected)?
     }
 
     pub async fn exec_and_wait(&self, cmd: impl Into<String>) -> Result<ExitStatus> {
@@ -185,7 +188,7 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnected)?
     }
 
     pub async fn exit_status(&self) -> Result<ExitStatus> {
@@ -196,7 +199,7 @@ impl Channel {
         };
 
         self.send_request(request).await?;
-        recver.await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnected)?
     }
 
     pub fn try_read(&mut self) -> Result<Option<Vec<u8>>> {
@@ -226,7 +229,7 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await.map_err(|_| Error::Disconnect)?
+        recver.await.map_err(|_| Error::Disconnected)?
     }
 
     pub async fn eof(&self) -> Result<()> {
@@ -241,7 +244,10 @@ impl Channel {
     }
 
     async fn send_request(&self, msg: Request) -> Result<()> {
-        self.session.send(msg).await.map_err(|_| Error::Disconnect)
+        self.session
+            .send(msg)
+            .await
+            .map_err(|_| Error::Disconnected)
     }
 }
 
@@ -277,4 +283,18 @@ pub(crate) struct ChannelInner {
     #[new(default)]
     pub(crate) stdout_buf: Vec<u8>,
     pub(crate) exit_status: Option<ExitStatus>,
+}
+
+impl ChannelInner {
+    pub(crate) async fn server_close(&mut self) {
+        self.server.closed = true;
+        self.stderr.closed().await;
+        self.stdout.closed().await;
+    }
+
+    pub(crate) async fn server_eof(&mut self) {
+        self.server.eof = true;
+        self.stderr.eof().await;
+        self.stdout.eof().await;
+    }
 }

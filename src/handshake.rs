@@ -148,7 +148,7 @@ impl<B> Default for Config<B> {
         let banner = format!(
             "SSH-2.0-{}_{}\r\n",
             project::PROJECT_NAME,
-            project::PKG_VERSION
+            project::PROJECT_VERSION
         );
         Self {
             banner,

@@ -115,8 +115,8 @@ pub mod code {
     pub const SSH_FXP_NAME: u8 = 104;
     pub const SSH_FXP_ATTRS: u8 = 105;
 
-    // pub const SSH_FXP_EXTENDED: u8 = 200;
-    // pub const SSH_FXP_EXTENDED_REPLY: u8 = 201;
+    pub const SSH_FXP_EXTENDED: u8 = 200;
+    pub const SSH_FXP_EXTENDED_REPLY: u8 = 201;
 
     // pub const SSH_FXF_ACCESS_DISPOSITION: u32 = 0x00000007;
     // pub const SSH_FXF_CREATE_NEW: u32 = 0x00000000;
@@ -173,3 +173,16 @@ pub const SFTP_VERSION: u32 = 3;
 // https://datatracker.ietf.org/doc/html/rfc4253#section-6.1
 pub const PAYLOAD_MAXIMUM_SIZE: usize = 32768;
 pub const PACKET_MAXIMUM_SIZE: usize = 35000;
+
+pub const OPENSSH_SFTP_EXT_POSIX_RENAME: (&str, &[u8]) = ("posix-rename@openssh.com", b"1");
+pub const OPENSSH_SFTP_EXT_STATVFS: (&str, &[u8]) = ("statvfs@openssh.com", b"2");
+pub const OPENSSH_SFTP_EXT_FSTATVFS: (&str, &[u8]) = ("fstatvfs@openssh.com", b"2");
+pub const OPENSSH_SFTP_EXT_HARDLINK: (&str, &[u8]) = ("hardlink@openssh.com", b"1");
+pub const OPENSSH_SFTP_EXT_FSYNC: (&str, &[u8]) = ("fsync@openssh.com", b"1");
+pub const OPENSSH_SFTP_EXT_LSETSTAT: (&str, &[u8]) = ("lsetstat@openssh.com", b"1");
+pub const OPENSSH_SFTP_EXT_LIMITS: (&str, &[u8]) = ("limits@openssh.com", b"1");
+pub const OPENSSH_SFTP_EXT_EXPAND_PATH: (&str, &[u8]) = ("expand-path@openssh.com", b"1");
+pub const OPENSSH_SFTP_EXT_COPY_DATA: (&str, &[u8]) = ("copy-data", b"1");
+pub const OPENSSH_SFTP_EXT_HOME_DIRECTORY: (&str, &[u8]) = ("home-directory", b"1");
+pub const OPENSSH_SFTP_EXT_USERS_GROUPS_BY_ID: (&str, &[u8]) =
+    ("users-groups-by-id@openssh.com", b"1");

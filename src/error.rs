@@ -34,7 +34,7 @@ pub enum Error {
     BannerExchange(String),
 
     #[error("Server connection lost")]
-    Disconnect,
+    Disconnected,
 
     #[error("Server Message mac verification failed")]
     MacVerificationFailed,

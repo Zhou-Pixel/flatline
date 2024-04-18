@@ -2,7 +2,10 @@ use super::error::{Error, Result};
 use bytes::BytesMut;
 use derive_new::new;
 use std::{mem::take, sync::Arc};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{
+    mpsc::{self, error::TryRecvError},
+    RwLock,
+};
 
 #[derive(Default)]
 struct IOState {
@@ -21,7 +24,11 @@ impl IOReceiver {
         if !self.buf.is_empty() {
             return Ok(Some(take(&mut self.buf).to_vec()));
         }
-        Ok(self.recver.try_recv().ok())
+        match self.recver.try_recv() {
+            Ok(v) => Ok(Some(v)),
+            Err(TryRecvError::Disconnected) => Err(Error::Disconnected),
+            Err(TryRecvError::Empty) => Ok(None),
+        }
     }
 
     pub(crate) async fn read(&mut self) -> Result<Vec<u8>> {
@@ -33,11 +40,11 @@ impl IOReceiver {
             None => {
                 let state = self.state.read().await;
                 if state.closed {
-                    Err(Error::ChannelClosed)
+                    Ok(vec![])
                 } else if state.eof {
                     Ok(vec![])
                 } else {
-                    Err(Error::Disconnect)
+                    Err(Error::Disconnected)
                 }
             }
         }
@@ -50,15 +57,23 @@ impl IOReceiver {
         }
         Ok(self.buf.split_to(size).to_vec())
     }
+
+    pub(crate) async fn is_closed(&self) -> bool {
+        self.state.read().await.closed
+    }
+
+    pub(crate) async fn is_eof(&self) -> bool {
+        self.state.read().await.eof
+    }
 }
 
 impl IOSender {
-    pub(crate) async fn is_eof(&mut self) {
+    pub(crate) async fn eof(&mut self) {
         self.sender.take();
         self.state.write().await.eof = true;
     }
 
-    pub(crate) async fn is_closed(&mut self) {
+    pub(crate) async fn closed(&mut self) {
         self.sender.take();
         self.state.write().await.closed = true;
     }

@@ -92,7 +92,7 @@ async fn open_sftp() {
 
     let dir = sftp.open_dir("/usr/lib/aarch64-linux-gnu").await.unwrap();
 
-    let path = sftp.real_path("./Documents").await.unwrap();
+    let path = sftp.realpath("./Documents").await.unwrap();
 
     println!("real path: {}", path);
 
