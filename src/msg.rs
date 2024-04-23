@@ -1,18 +1,11 @@
-use super::channel::Channel;
+use super::channel::{Channel, ChannelOpenFailureReson, Signal};
 use super::error::Result;
+use super::session::{DisconnectReson, Userauth};
 use super::sftp::SFtp;
 use super::ssh::common::code::*;
+use crate::forward::Listener;
 use crate::ssh::buffer::Buffer;
-use derive_new::new;
-use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-
-#[derive(Debug)]
-pub enum Userauth {
-    Success,
-    Failure(Vec<String>, bool),
-    Expired,
-}
 
 pub(crate) enum Request {
     SessionDrop {
@@ -38,7 +31,6 @@ pub(crate) enum Request {
     ChannelOpenSession {
         initial: u32,
         maximum: u32,
-        session: mpsc::Sender<Request>,
         sender: oneshot::Sender<Result<Channel>>,
     },
     ChannelExec {
@@ -46,15 +38,34 @@ pub(crate) enum Request {
         cmd: String,
         sender: oneshot::Sender<Result<()>>,
     },
-    ChannelExecWait {
-        id: u32,
-        cmd: String,
-        sender: oneshot::Sender<Result<ExitStatus>>,
+    TcpipForward {
+        address: String,
+        port: u32,
+        initial: u32,
+        maximum: u32,
+        sender: oneshot::Sender<Result<Listener>>,
     },
-    ChannelGetExitStatus {
-        id: u32,
-        sender: oneshot::Sender<Result<ExitStatus>>,
+    CancelTcpipForward {
+        address: String,
+        port: u32,
+        sender: Option<oneshot::Sender<Result<()>>>,
     },
+    DirectTcpip {
+        initial: u32,
+        maximum: u32,
+        remote: (String, u32),
+        local: (String, u32),
+        sender: oneshot::Sender<Result<Channel>>,
+    },
+    // ChannelExecWait {
+    //     id: u32,
+    //     cmd: String,
+    //     sender: oneshot::Sender<Result<ExitStatus>>,
+    // },
+    // ChannelGetExitStatus {
+    //     id: u32,
+    //     sender: oneshot::Sender<Result<ExitStatus>>,
+    // },
     ChannelDrop {
         id: u32,
         sender: Option<oneshot::Sender<Result<()>>>,
@@ -75,7 +86,7 @@ pub(crate) enum Request {
         signal: Signal,
         sender: oneshot::Sender<Result<()>>,
     },
-    ChannelEOF {
+    ChannelEof {
         id: u32,
         sender: oneshot::Sender<Result<()>>,
     },
@@ -83,75 +94,19 @@ pub(crate) enum Request {
         id: u32,
         sender: oneshot::Sender<Result<()>>,
     },
-    SFtpOpen {
-        session: mpsc::Sender<Request>,
+    ChannelReuqestShell {
+        id: u32,
+        sender: oneshot::Sender<Result<()>>,
+    },
+    SFtpFromChannel {
+        channel: Channel,
         sender: oneshot::Sender<Result<SFtp>>,
     },
-}
-
-#[repr(transparent)]
-#[derive(Debug, PartialEq, Eq)]
-pub struct ChannelOpenFailureReson(pub u32);
-
-impl ChannelOpenFailureReson {
-    pub const ADMINISTRATIVELY_PROHIBITED: Self = Self(SSH_OPEN_ADMINISTRATIVELY_PROHIBITED);
-    pub const CONNECT_FAILED: Self = Self(SSH_OPEN_CONNECT_FAILED);
-    pub const UNKNOWN_CHANNELTYPE: Self = Self(SSH_OPEN_UNKNOWN_CHANNELTYPE);
-    pub const RESOURCE_SHORTAGE: Self = Self(SSH_OPEN_RESOURCE_SHORTAGE);
-}
-
-#[repr(transparent)]
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct DisconnectReson(pub u32);
-
-impl DisconnectReson {
-    pub const HOST_NOT_ALLOWED_TO_CONNECT: Self = Self(SSH_DISCONNECT_HOST_NOT_ALLOWED_TO_CONNECT);
-    pub const PROTOCOL_ERROR: Self = Self(SSH_DISCONNECT_PROTOCOL_ERROR);
-    pub const KEY_EXCHANGE_FAILED: Self = Self(SSH_DISCONNECT_KEY_EXCHANGE_FAILED);
-    pub const RESERVED: Self = Self(SSH_DISCONNECT_RESERVED);
-    pub const MAC_ERROR: Self = Self(SSH_DISCONNECT_MAC_ERROR);
-    pub const COMPRESSION_ERROR: Self = Self(SSH_DISCONNECT_COMPRESSION_ERROR);
-    pub const SERVICE_NOT_AVAILABLE: Self = Self(SSH_DISCONNECT_SERVICE_NOT_AVAILABLE);
-    pub const PROTOCOL_VERSION_NOT_SUPPORTED: Self =
-        Self(SSH_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED);
-    pub const HOST_KEY_NOT_VERIFIABLE: Self = Self(SSH_DISCONNECT_HOST_KEY_NOT_VERIFIABLE);
-    pub const CONNECTION_LOST: Self = Self(SSH_DISCONNECT_CONNECTION_LOST);
-    pub const BY_APPLICATION: Self = Self(SSH_DISCONNECT_BY_APPLICATION);
-    pub const TOO_MANY_CONNECTIONS: Self = Self(SSH_DISCONNECT_TOO_MANY_CONNECTIONS);
-    pub const AUTH_CANCELLED_BY_USER: Self = Self(SSH_DISCONNECT_AUTH_CANCELLED_BY_USER);
-    pub const NO_MORE_AUTH_METHODS_AVAILABLE: Self =
-        Self(SSH_DISCONNECT_NO_MORE_AUTH_METHODS_AVAILABLE);
-    pub const ILLEGAL_USER_NAME: Self = Self(SSH_DISCONNECT_ILLEGAL_USER_NAME);
-}
-
-#[derive(Debug, Clone)]
-pub struct Signal(pub String);
-
-impl PartialEq<&str> for Signal {
-    fn eq(&self, other: &&str) -> bool {
-        self.0 == *other
-    }
-}
-
-impl<T: Into<String>> From<T> for Signal {
-    fn from(value: T) -> Self {
-        Self(value.into())
-    }
-}
-
-impl Signal {
-    pub const ABRT: &'static str = "ABRT";
-    pub const FPE: &'static str = "FPE";
-    pub const HUP: &'static str = "HUP";
-    pub const ILL: &'static str = "ILL";
-    pub const INT: &'static str = "INT";
-    pub const KILL: &'static str = "KILL";
-    pub const PIPE: &'static str = "PIPE";
-    pub const QUIT: &'static str = "QUIT";
-    pub const SEGV: &'static str = "SEGV";
-    pub const TERM: &'static str = "TERM";
-    pub const USR1: &'static str = "USR1";
-    pub const USR2: &'static str = "USR2";
+    SFtpOpen {
+        initial: u32,
+        maximum: u32,
+        sender: oneshot::Sender<Result<SFtp>>,
+    },
 }
 
 #[derive(Debug)]
@@ -223,16 +178,14 @@ pub(crate) enum Message {
     },
     Ignore(Vec<u8>),
     Ping(Vec<u8>),
-}
-
-#[derive(Debug, Clone, new)]
-pub enum ExitStatus {
-    Normal(u32),
-    Interrupt {
-        signal: Signal,
-        core_dumped: bool,
-        error_msg: String,
-        tag: String,
+    ForwardTcpIp {
+        sender: u32,
+        initial: u32,
+        maximum: u32,
+        listen_address: String,     // connected address
+        listen_port: u32,           // connected port
+        originator_address: String, // originator IP address
+        originator_port: u32,       // originator port
     },
 }
 
@@ -451,6 +404,34 @@ impl Message {
                 }
                 SSH_MSG_IGNORE => Some(Self::Ignore(buffer.take_one()?.1)),
                 SSH2_MSG_PING => Some(Self::Ping(buffer.take_one()?.1)),
+                SSH_MSG_CHANNEL_OPEN => {
+                    let cmd = buffer.take_one()?.1;
+                    if cmd == b"forwarded-tcpip" {
+                        let sender = buffer.take_u32()?;
+                        let initial = buffer.take_u32()?;
+                        let maximum = buffer.take_u32()?;
+                        let c_address = buffer.take_one()?.1;
+                        let c_address = utf8(&c_address)?;
+                        let c_port = buffer.take_u32()?;
+
+                        let o_address = buffer.take_one()?.1;
+                        let o_address = utf8(&o_address)?;
+                        let o_port = buffer.take_u32()?;
+
+                        Some(Self::ForwardTcpIp {
+                            sender,
+                            initial,
+                            maximum,
+                            listen_address: c_address,
+                            listen_port: c_port,
+                            originator_address: o_address,
+                            originator_port: o_port,
+                        })
+                    } else {
+                        detail = "Unimplemented".to_string();
+                        None
+                    }
+                }
                 _ => {
                     detail = format!("unknown code: {code} datalen: {}", buffer.len());
                     None

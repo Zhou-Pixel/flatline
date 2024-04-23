@@ -1,9 +1,9 @@
 use std::{io, string::FromUtf8Error};
 
+use super::channel::ChannelOpenFailureReson;
 use openssl::error::ErrorStack;
 use thiserror::Error;
-
-use super::msg::ChannelOpenFailureReson;
+use tokio::sync::oneshot::error::RecvError;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -97,6 +97,9 @@ pub enum Error {
 
     #[error("SFtp: {0}")]
     OpUnsupported(String),
+
+    #[error("Failed to Request: {0}")]
+    RequestFailure(String),
 }
 
 // struct Unexpect {
@@ -115,5 +118,11 @@ impl Error {
 
     pub fn invalid_format(tip: impl Into<String>) -> Self {
         Self::InvalidFormat(tip.into())
+    }
+}
+
+impl From<RecvError> for Error {
+    fn from(_: RecvError) -> Self {
+        Self::Disconnected
     }
 }

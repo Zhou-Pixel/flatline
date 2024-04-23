@@ -48,16 +48,13 @@ use crate::{
 
 use super::common::{code::*, PAYLOAD_MAXIMUM_SIZE};
 
-pub struct BufferStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
+pub struct BufferStream<T> {
     socket: T,
     r_buf: BytesMut,
     w_buf: BytesMut,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin> BufferStream<T> {
+impl<T> BufferStream<T> {
     pub fn new(socket: T) -> Self {
         Self {
             socket,
@@ -66,6 +63,27 @@ impl<T: AsyncRead + AsyncWrite + Unpin> BufferStream<T> {
         }
     }
 
+    pub fn inner(&self) -> &T {
+        &self.socket
+    }
+}
+
+impl<T: AsyncWrite + Unpin> BufferStream<T> {
+    pub async fn write(&mut self, data: impl AsRef<[u8]>) -> io::Result<()> {
+        self.w_buf.put(data.as_ref());
+
+        self.socket.write_buf(&mut self.w_buf).await.map(|_| ())
+    }
+
+    pub async fn flush(&mut self) -> io::Result<()> {
+        while !self.w_buf.is_empty() {
+            self.socket.write_buf(&mut self.w_buf).await?;
+        }
+        self.socket.flush().await
+    }
+}
+
+impl<T: AsyncRead + Unpin> BufferStream<T> {
     async fn internal_read(&mut self) -> io::Result<usize> {
         let size = self.socket.read_buf(&mut self.r_buf).await?;
         if size == 0 {
@@ -114,19 +132,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin> BufferStream<T> {
     //     }
     //     Ok(take(&mut self.r_buf).to_vec())
     // }
-
-    pub async fn write(&mut self, data: impl AsRef<[u8]>) -> io::Result<()> {
-        self.w_buf.put(data.as_ref());
-
-        self.socket.write_buf(&mut self.w_buf).await.map(|_| ())
-    }
-
-    pub async fn flush(&mut self) -> io::Result<()> {
-        while !self.w_buf.is_empty() {
-            self.socket.write_buf(&mut self.w_buf).await?;
-        }
-        self.socket.flush().await
-    }
 
     pub async fn read_exact(&mut self, size: usize) -> io::Result<Vec<u8>> {
         while self.r_buf.len() < size {

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 
+use super::channel::ChannelOpenFailureReson;
 use super::handshake;
 use super::ssh::stream::CipherStream;
 
@@ -14,28 +15,27 @@ use crate::cipher::sign;
 
 use crate::error::Error;
 use crate::error::Result;
+use crate::forward::Listener;
+use crate::forward::Socket;
 
+use super::channel::Message as ChannelMsg;
 use crate::handshake::Behavior;
-use crate::msg::DisconnectReson;
-use crate::msg::ExitStatus;
 use crate::sftp::SFtp;
-use crate::ssh::buffer::Buffer;
-use crate::ssh::common::code::*;
-use crate::ssh::common::PAYLOAD_MAXIMUM_SIZE;
-use crate::ssh::common::SFTP_VERSION;
-use crate::ssh::stream::BufferStream;
-use crate::utils::io_channel;
+use crate::ssh::{
+    buffer::Buffer,
+    common::{code::*, PAYLOAD_MAXIMUM_SIZE, SFTP_VERSION},
+    stream::BufferStream,
+};
 
-use super::channel::Channel;
+use super::channel::{Channel, ExitStatus};
 use super::msg::Message;
 use super::msg::Request;
-use super::msg::Userauth;
 use crate::ssh::stream::PlainStream;
 use derive_new::new;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+
 macro_rules! channel_loop {
     ($sel:ident,$id:expr,$($e:pat $(if $c:expr )? => $h:expr,)*) => {
         loop {
@@ -60,6 +60,55 @@ struct Endpoint {
     _banner: String,
 }
 
+#[derive(Debug, Clone)]
+pub enum Userauth {
+    Success,
+    Failure(Vec<String>, bool),
+    Expired,
+}
+
+#[repr(transparent)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct DisconnectReson(pub u32);
+
+impl DisconnectReson {
+    pub const HOST_NOT_ALLOWED_TO_CONNECT: Self = Self(SSH_DISCONNECT_HOST_NOT_ALLOWED_TO_CONNECT);
+    pub const PROTOCOL_ERROR: Self = Self(SSH_DISCONNECT_PROTOCOL_ERROR);
+    pub const KEY_EXCHANGE_FAILED: Self = Self(SSH_DISCONNECT_KEY_EXCHANGE_FAILED);
+    pub const RESERVED: Self = Self(SSH_DISCONNECT_RESERVED);
+    pub const MAC_ERROR: Self = Self(SSH_DISCONNECT_MAC_ERROR);
+    pub const COMPRESSION_ERROR: Self = Self(SSH_DISCONNECT_COMPRESSION_ERROR);
+    pub const SERVICE_NOT_AVAILABLE: Self = Self(SSH_DISCONNECT_SERVICE_NOT_AVAILABLE);
+    pub const PROTOCOL_VERSION_NOT_SUPPORTED: Self =
+        Self(SSH_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED);
+    pub const HOST_KEY_NOT_VERIFIABLE: Self = Self(SSH_DISCONNECT_HOST_KEY_NOT_VERIFIABLE);
+    pub const CONNECTION_LOST: Self = Self(SSH_DISCONNECT_CONNECTION_LOST);
+    pub const BY_APPLICATION: Self = Self(SSH_DISCONNECT_BY_APPLICATION);
+    pub const TOO_MANY_CONNECTIONS: Self = Self(SSH_DISCONNECT_TOO_MANY_CONNECTIONS);
+    pub const AUTH_CANCELLED_BY_USER: Self = Self(SSH_DISCONNECT_AUTH_CANCELLED_BY_USER);
+    pub const NO_MORE_AUTH_METHODS_AVAILABLE: Self =
+        Self(SSH_DISCONNECT_NO_MORE_AUTH_METHODS_AVAILABLE);
+    pub const ILLEGAL_USER_NAME: Self = Self(SSH_DISCONNECT_ILLEGAL_USER_NAME);
+}
+
+// #[derive(Debug, Clone)]
+// pub struct Address(String);
+
+// impl Address {
+//     pub const ALL: &'static str = "";
+//     pub const IPV4_ALL: &'static str = "0.0.0.0";
+//     pub const IPV6_ALL: &'static str = "::";
+//     pub const LOCALHOST: &'static str = "localhost";
+//     pub const IPV4_LOCALHOST: &'static str = "127.0.0.1";
+//     pub const IPV6_LOCALHOST: &'static str = "::1";
+// }
+
+// impl From<&str> for Address {
+//     fn from(value: &str) -> Self {
+//         Address(value.to_string())
+//     }
+// }
+
 pub struct Session {
     sender: ManuallyDrop<mpsc::Sender<Request>>,
 }
@@ -82,7 +131,7 @@ impl Session {
         }
     }
 
-    async fn send_request(&mut self, msg: Request) -> Result<()> {
+    async fn send_request(&self, msg: Request) -> Result<()> {
         self.sender.send(msg).await.map_err(|_| Error::Disconnected)
     }
 
@@ -92,6 +141,61 @@ impl Session {
     // pub async fn channel_stdout_read(&mut self, channel: &mut Channel) -> Result<Vec<u8>> {
     //     channel.stdout.recv().await.map_err(|_| Error::Disconnect)
     // }
+
+    pub async fn direct_tcpip_default(&self, remote: (impl Into<String>, u32), local: (impl Into<String>, u32)) -> Result<Socket> {
+        self.direct_tcpip(2 * 1024 * 1024, 32000, remote, local).await
+    }
+
+    pub async fn direct_tcpip(
+        &self,
+        initial: u32,
+        maximum: u32,
+        remote: (impl Into<String>, u32),
+        local: (impl Into<String>, u32),
+    ) -> Result<Socket> {
+        let (sender, recver) = oneshot::channel();
+        let address: String = remote.0.into();
+        self.send_request(Request::DirectTcpip {
+            initial,
+            maximum,
+            remote: (address.clone(), remote.1),
+            local: (local.0.into(), local.1),
+            sender,
+        })
+        .await?;
+        let channel = recver.await??;
+
+        Ok(Socket::new(channel, address, remote.1))
+    }
+
+    pub async fn tcpip_forward_default(
+        &self,
+        address: impl Into<String>,
+        port: u32,
+    ) -> Result<Listener> {
+        self.tcpip_forward(address, port, 2 * 1024 * 1024, 3200)
+            .await
+    }
+
+    pub async fn tcpip_forward(
+        &self,
+        address: impl Into<String>,
+        port: u32,
+        initial: u32,
+        maximum: u32,
+    ) -> Result<Listener> {
+        let (sender, recver) = oneshot::channel();
+        self.send_request(Request::TcpipForward {
+            address: address.into(),
+            port,
+            initial,
+            maximum,
+            sender,
+        })
+        .await?;
+
+        recver.await?
+    }
 
     pub async fn disconnect_default(self) -> Result<()> {
         self.disconnect(DisconnectReson::BY_APPLICATION, "exit")
@@ -115,36 +219,42 @@ impl Session {
         res
     }
 
-    pub async fn sftp_open(&mut self) -> Result<SFtp> {
+    #[inline]
+    pub async fn sftp_open_default(&self) -> Result<SFtp> {
+        self.sftp_open(2 * 1024 * 1024, 32000).await
+    }
+
+    pub async fn sftp_open(&self, initial: u32, maximum: u32) -> Result<SFtp> {
         let (sender, recver) = oneshot::channel();
         self.send_request(Request::SFtpOpen {
-            session: (*self.sender).clone(),
+            initial,
+            maximum,
             sender,
         })
         .await?;
 
-        recver.await.map_err(|_| Error::Disconnected)?
+        recver.await?
     }
 
-    pub async fn channel_open_default(&mut self) -> Result<Channel> {
+    #[inline]
+    pub async fn channel_open_default(&self) -> Result<Channel> {
         self.channel_open(1024 * 1024, 32768).await
     }
 
-    pub async fn channel_open(&mut self, initial: u32, maximum: u32) -> Result<Channel> {
+    pub async fn channel_open(&self, initial: u32, maximum: u32) -> Result<Channel> {
         let (sender, recver) = oneshot::channel();
         let msg = Request::ChannelOpenSession {
             initial,
             maximum,
-            session: (*self.sender).clone(),
             sender,
         };
 
         self.send_request(msg).await?;
 
-        recver.await.map_err(|_| Error::Disconnected)?
+        recver.await?
     }
 
-    pub async fn userauth_none(&mut self, username: impl Into<String>) -> Result<Userauth> {
+    pub async fn userauth_none(&self, username: impl Into<String>) -> Result<Userauth> {
         let username = username.into();
 
         let (sender, recver) = oneshot::channel();
@@ -153,11 +263,11 @@ impl Session {
 
         self.send_request(requset).await?;
 
-        recver.await.map_err(|_| Error::Disconnected)?
+        recver.await?
     }
 
     pub async fn userauth_publickey(
-        &mut self,
+        &self,
         username: impl Into<String>,
         method: impl Into<String>,
         publickey: impl Into<Vec<u8>>,
@@ -173,11 +283,11 @@ impl Session {
         };
         self.send_request(request).await?;
 
-        recver.await.map_err(|_| Error::Disconnected)?
+        recver.await?
     }
 
     pub async fn userauth_password(
-        &mut self,
+        &self,
         username: impl Into<String>,
         password: impl Into<String>,
     ) -> Result<Userauth> {
@@ -196,7 +306,7 @@ impl Session {
             .send(request)
             .await
             .map_err(|_| Error::Disconnected)?;
-        recver.await.map_err(|_| Error::Disconnected)?
+        recver.await?
     }
 
     pub async fn handshake<T, B: Behavior + Send + 'static>(
@@ -260,6 +370,7 @@ impl Session {
 
         let (sender, recver) = mpsc::channel(4096);
 
+        let weak_sender = sender.downgrade();
         let session = Session::new(sender);
 
         let stream = plain_stream.encrypt(
@@ -272,13 +383,20 @@ impl Session {
             Endpoint::new(config.banner),
             Endpoint::new(banner),
             recver,
-            HashMap::new(),
+            weak_sender,
             config.behavior,
         );
         inner.request_userauth_service().await?;
         inner.run();
         Ok(session)
     }
+}
+
+#[derive(new)]
+struct ListenerInner {
+    sender: mpsc::Sender<Socket>,
+    initial: u32,
+    maximum: u32,
 }
 
 #[derive(new)]
@@ -292,7 +410,13 @@ where
     _client: Endpoint,
     _server: Endpoint,
     recver: mpsc::Receiver<Request>,
+
+    #[new(default)]
     channels: HashMap<u32, ChannelInner>,
+
+    #[new(default)]
+    listeners: HashMap<(String, u32), ListenerInner>,
+    weak_sender: mpsc::WeakSender<Request>,
     behaivor: Option<B>,
 }
 
@@ -302,7 +426,7 @@ where
     B: Behavior + Send,
 {
     fn run(mut self) {
-        let handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
                 tokio::select! {
                     request = self.recver.recv() => {
@@ -322,10 +446,6 @@ where
             }
             Result::Ok(())
         });
-
-        tokio::spawn(async move {
-            println!("session exit: {:?}", tokio::join!(handle));
-        });
     }
 
     async fn session_disconnect(&mut self, reson: DisconnectReson, desc: &str) -> Result<()> {
@@ -337,7 +457,7 @@ where
         self.stream.send_payload(buffer.as_ref()).await
     }
 
-    fn genarate_channel_id(&mut self) -> u32 {
+    fn genarate_channel_id(&self) -> u32 {
         let mut next = 0;
         for (_, channel) in self.channels.iter() {
             if (!channel.server.closed || !channel.client.closed) && next <= channel.client.id {
@@ -397,16 +517,30 @@ where
             } => {
                 let channel = self.get_server_channel(recipient)?;
 
-                channel.exit_status = Some(ExitStatus::new_interrupt(
-                    signal,
-                    core_dumped,
-                    error_msg,
-                    tag,
-                ));
+                let _ = channel
+                    .sender
+                    .send(ChannelMsg::Exit(ExitStatus::new_interrupt(
+                        signal,
+                        core_dumped,
+                        error_msg,
+                        tag,
+                    )))
+                    .await;
+
+                // channel.exit_status = Some(ExitStatus::new_interrupt(
+                //     signal,
+                //     core_dumped,
+                //     error_msg,
+                //     tag,
+                // ));
             }
             Message::ChannelExitStatus { recipient, status } => {
                 let channel = self.get_server_channel(recipient)?;
-                channel.exit_status = Some(ExitStatus::new_normal(status));
+                let _ = channel
+                    .sender
+                    .send(ChannelMsg::Exit(ExitStatus::new_normal(status)))
+                    .await;
+                // channel.exit_status = Some(ExitStatus::new_normal(status));
             }
             Message::Disconnect {
                 reason,
@@ -452,7 +586,91 @@ where
             Message::Unimplemented(seqno) => {
                 return Err(Error::Unimplemented(seqno));
             }
-            _ => {}
+            Message::ForwardTcpIp {
+                sender,
+                initial,
+                maximum,
+                listen_address,
+                listen_port,
+                originator_address,
+                originator_port,
+            } => {
+                self.accpet_tcpip_forward(
+                    sender,
+                    initial,
+                    maximum,
+                    listen_address,
+                    listen_port,
+                    originator_address,
+                    originator_port,
+                )
+                .await?;
+            }
+            msg => {
+                println!("msg :{:?} from server is ignore", msg);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn upgrade_sender(&self) -> Result<mpsc::Sender<Request>> {
+        self.weak_sender
+            .upgrade()
+            .ok_or(Error::ub("Session has been dropped"))
+    }
+
+    async fn accpet_tcpip_forward(
+        &mut self,
+        sender: u32,
+        initial: u32,
+        maximum: u32,
+        listen_address: String,
+        listen_port: u32,
+        originator_address: String,
+        originator_port: u32,
+    ) -> Result<()> {
+        let listen = (listen_address, listen_port);
+
+        let mut buffer = Buffer::new();
+        match self.listeners.get(&listen) {
+            Some(listener) => {
+                let session = self.upgrade_sender()?;
+                buffer.put_u8(SSH_MSG_CHANNEL_OPEN_CONFIRMATION);
+                buffer.put_u32(sender);
+
+                let client_id = self.genarate_channel_id();
+
+                buffer.put_u32(client_id);
+                buffer.put_u32(listener.initial);
+                buffer.put_u32(listener.maximum);
+
+                self.stream.send_payload(buffer.as_ref()).await?;
+
+                let (tx, rx) = mpsc::channel(4096);
+
+                let channel = Channel::new(client_id, rx, session);
+                use super::channel::Endpoint as ChannelEp;
+
+                let inner = ChannelInner::new(
+                    ChannelEp::new(client_id, listener.initial, listener.maximum),
+                    ChannelEp::new(sender, initial, maximum),
+                    tx,
+                );
+
+                self.channels.insert(client_id, inner);
+
+                let socket = Socket::new(channel, originator_address, originator_port);
+                let _ = listener.sender.send(socket).await;
+            }
+            None => {
+                buffer.put_u8(SSH_MSG_CHANNEL_OPEN_FAILURE);
+                buffer.put_u32(sender);
+                buffer.put_u32(ChannelOpenFailureReson::UNKNOWN_CHANNELTYPE.0);
+                buffer.put_one("Listener not found");
+                buffer.put_u32(0); // tag
+                self.stream.send_payload(buffer.as_ref()).await?;
+            }
         }
 
         Ok(())
@@ -500,7 +718,8 @@ where
         if let Some(channel) = self.channels.get_mut(&recipient) {
             channel.client.size -= data.len() as u32;
 
-            let value = channel.stderr.write(data).await.is_ok();
+            let value = channel.sender.send(ChannelMsg::Stderr(data)).await.is_ok();
+            // let value = channel.stderr.write(data).await.is_ok();
             if channel.client.size < channel.client.maximum {
                 let count = channel.client.initial - channel.client.size;
                 let mut buffer = Buffer::new();
@@ -519,7 +738,8 @@ where
     async fn append_channel_stdout(&mut self, recipient: u32, data: Vec<u8>) -> Result<bool> {
         if let Some(channel) = self.channels.get_mut(&recipient) {
             channel.client.size -= data.len() as u32;
-            let value = channel.stdout.write(data).await.is_ok();
+            let value = channel.sender.send(ChannelMsg::Stdout(data)).await.is_ok();
+            // let value = channel.stdout.write(data).await.is_ok();
             if channel.client.size < channel.client.maximum {
                 let count = channel.client.initial - channel.client.size;
                 let mut buffer = Buffer::new();
@@ -548,10 +768,9 @@ where
             Request::ChannelOpenSession {
                 initial,
                 maximum,
-                session,
                 sender,
             } => {
-                let res = self.channel_open_session(initial, maximum, session).await;
+                let res = self.channel_open_session(initial, maximum).await;
 
                 let _ = sender.send(res);
             }
@@ -570,8 +789,12 @@ where
 
                 let _ = sender.send(res);
             }
-            Request::SFtpOpen { session, sender } => {
-                let res = self.sftp_open(2 * 1024 * 1024, 32768, session).await;
+            Request::SFtpOpen {
+                initial,
+                maximum,
+                sender,
+            } => {
+                let res = self.sftp_open(initial, maximum).await;
 
                 let _ = sender.send(res);
             }
@@ -591,17 +814,17 @@ where
                     .await;
                 let _ = sender.send(res);
             }
-            Request::ChannelExecWait { id, cmd, sender } => {
-                let res = self.channel_exec_wait(id, &cmd).await;
+            // Request::ChannelExecWait { id, cmd, sender } => {
+            //     let res = self.channel_exec_wait(id, &cmd).await;
 
-                let _ = sender.send(res);
-            }
-            Request::ChannelGetExitStatus { id, sender } => {
-                let res = self.wait_for_finish(id).await;
+            //     let _ = sender.send(res);
+            // }
+            // Request::ChannelGetExitStatus { id, sender } => {
+            //     let res = self.wait_for_finish(id).await;
 
-                let _ = sender.send(res);
-            }
-            Request::ChannelEOF { id, sender } => {
+            //     let _ = sender.send(res);
+            // }
+            Request::ChannelEof { id, sender } => {
                 let res = self.channel_eof(id).await;
 
                 let _ = sender.send(res);
@@ -628,8 +851,219 @@ where
 
                 let _ = sender.send(res);
             }
+            Request::ChannelReuqestShell { id, sender } => {
+                let _ = sender.send(self.channel_request_shell(id).await);
+            }
+            Request::SFtpFromChannel { channel, sender } => {
+                let func = async {
+                    let inner = self
+                        .channels
+                        .remove(&channel.id)
+                        .ok_or(Error::ub("Channel not found"))?;
+
+                    self.sftp_from_channel(channel, inner).await
+                };
+
+                let _ = sender.send(func.await);
+            }
+            Request::TcpipForward {
+                address,
+                port,
+                initial,
+                maximum,
+                sender,
+            } => {
+                let _ = sender.send(self.tcpip_forward(&address, port, initial, maximum).await);
+            }
+            Request::CancelTcpipForward {
+                address,
+                port,
+                sender,
+            } => {
+                let res = self.cancel_tcpip_forward(&address, port).await;
+
+                if let Some(sender) = sender {
+                    let _ = sender.send(res);
+                }
+            }
+            Request::DirectTcpip {
+                initial,
+                maximum,
+                remote,
+                local,
+                sender,
+            } => {
+                let _ = sender.send(self.direct_tcpip(initial, maximum, remote, local).await);
+            }
         }
         false
+    }
+
+    async fn direct_tcpip(
+        &mut self,
+        initial: u32,
+        maximum: u32,
+        remote: (String, u32),
+        local: (String, u32),
+    ) -> Result<Channel> {
+        let session = self.upgrade_sender()?;
+        let mut buffer = Buffer::new();
+
+        let client_id = self.genarate_channel_id();
+        buffer.put_u8(SSH_MSG_CHANNEL_OPEN);
+        buffer.put_one("direct-tcpip");
+        buffer.put_u32(client_id);
+        buffer.put_u32(initial);
+        buffer.put_u32(maximum);
+        buffer.put_one(remote.0);
+        buffer.put_u32(remote.1);
+        buffer.put_one(local.0);
+        buffer.put_u32(local.1);
+
+        self.stream.send_payload(buffer.as_ref()).await?;
+
+        loop {
+            let msg = self.recv_msg().await?;
+            return match msg {
+                Message::ChannelOpenFailure {
+                    recipient,
+                    reson,
+                    desc,
+                    ..
+                } if recipient == client_id => Err(Error::ChannelOpenFail(reson, desc)),
+                Message::ChannelOpenConfirmation {
+                    recipient,
+                    sender,
+                    initial: server_initial,
+                    maximum: server_maximum,
+                } if recipient == client_id => {
+                    let client = ChannelEndpoint::new(client_id, initial, maximum);
+                    let server = ChannelEndpoint::new(sender, server_initial, server_maximum);
+                    let (sender, recver) = mpsc::channel(4096);
+
+                    let channel = Channel::new(client.id, recver, session);
+
+                    let inner = ChannelInner::new(
+                        client, server, // Box::new(NormalChannel::new(stdout.0, stderr.0)),
+                        sender,
+                    );
+
+                    self.channels.insert(client_id, inner);
+                    return Ok(channel);
+                }
+
+                msg => {
+                    self.handle_msg(msg).await?;
+                    continue;
+                }
+            };
+        }
+    }
+
+    async fn cancel_tcpip_forward(&mut self, address: &str, port: u32) -> Result<()> {
+        let mut buffer = Buffer::new();
+        buffer.put_u8(SSH_MSG_GLOBAL_REQUEST);
+        buffer.put_one("cancel-tcpip-forward");
+        buffer.put_u8(1);
+        buffer.put_one(address);
+        buffer.put_u32(port);
+
+        self.stream.send_payload(buffer.as_ref()).await?;
+
+        loop {
+            let packet = self.stream.recv_packet().await?;
+            let mut payload = Buffer::from_vec(packet.payload.clone());
+
+            match payload.take_u8() {
+                Some(SSH_MSG_REQUEST_SUCCESS) => {
+                    self.listeners.remove(&(address.to_string(), port));
+                    return Ok(());
+                }
+                Some(SSH_MSG_REQUEST_FAILURE) => {
+                    return Err(Error::RequestFailure(
+                        "Failed to cancel tcpip forward".to_string(),
+                    ));
+                }
+                None => return Err(Error::invalid_format("Invalid code")),
+                _ => {
+                    let msg =
+                        Message::parse(packet.payload).map_err(Error::invalid_format)?;
+
+                    self.handle_msg(msg).await?;
+                }
+            }
+        }
+    }
+
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        mut port: u32,
+        initial: u32,
+        maximum: u32,
+    ) -> Result<Listener> {
+        let session = self.upgrade_sender()?;
+        let mut buffer = Buffer::new();
+        buffer.put_u8(SSH_MSG_GLOBAL_REQUEST);
+        buffer.put_one("tcpip-forward");
+        buffer.put_u8(1);
+        buffer.put_one(address);
+        buffer.put_u32(port);
+
+        self.stream.send_payload(buffer.as_ref()).await?;
+
+        loop {
+            let packet = self.stream.recv_packet().await?;
+            let mut payload = Buffer::from_vec(packet.payload.clone());
+
+            match payload.take_u8() {
+                Some(SSH_MSG_REQUEST_SUCCESS) => {
+                    if port == 0 {
+                        port = payload
+                            .take_u32()
+                            .ok_or(Error::invalid_format("Invalid port"))?;
+                    }
+                    let (sender, recver) = mpsc::channel(4096);
+
+                    self.listeners.insert(
+                        (address.to_string(), port),
+                        ListenerInner::new(sender, initial, maximum),
+                    );
+
+                    return Ok(Listener::new(session, recver, address.to_string(), port));
+                }
+                Some(SSH_MSG_REQUEST_FAILURE) => {
+                    return Err(Error::RequestFailure("Failed to tcpip forward".to_string()));
+                }
+                None => return Err(Error::invalid_format("Invalid code")),
+                _ => {
+                    let msg =
+                        Message::parse(packet.payload).map_err(Error::invalid_format)?;
+
+                    self.handle_msg(msg).await?;
+                }
+            }
+        }
+    }
+
+    async fn channel_request_shell(&mut self, id: u32) -> Result<()> {
+        let mut buffer = Buffer::new();
+
+        buffer.put_u8(SSH_MSG_CHANNEL_REQUEST);
+        buffer.put_u32(id);
+        buffer.put_one("shell");
+        buffer.put_u8(1);
+
+        self.stream.send_payload(buffer.as_ref()).await?;
+
+        channel_loop!(
+            self,
+            id,
+            Message::ChannelSuccess(recipient) if recipient == id => return Ok(()),
+            Message::ChannelFailure(recipient) if recipient == id => {
+                return Err(Error::ChannelFailure);
+            },
+        );
     }
 
     async fn channel_send_signal(&mut self, id: u32, signal: &str) -> Result<()> {
@@ -682,82 +1116,82 @@ where
         );
     }
 
-    async fn wait_for_finish(&mut self, id: u32) -> Result<ExitStatus> {
-        let channel = self
-            .channels
-            .get_mut(&id)
-            .ok_or(Error::ub("Failed to find channel"))?;
+    // async fn wait_for_finish(&mut self, id: u32) -> Result<ExitStatus> {
+    //     let channel = self
+    //         .channels
+    //         .get_mut(&id)
+    //         .ok_or(Error::ub("Failed to find channel"))?;
 
-        if let Some(ref exit_status) = channel.exit_status {
-            return Ok(exit_status.clone());
-        }
+    //     if let Some(ref exit_status) = channel.exit_status {
+    //         return Ok(exit_status.clone());
+    //     }
 
-        let status = channel_loop!(
-            self,
-            id,
-            Message::ChannelExitStatus { recipient, status } if id == recipient => {
-                break ExitStatus::Normal(status);
-            },
-            Message::ChannelExitSignal {
-                recipient,
-                signal,
-                core_dumped,
-                error_msg,
-                tag,
-            } if recipient == id => {
-                break ExitStatus::Interrupt {
-                    signal,
-                    core_dumped,
-                    error_msg,
-                    tag
-                };
-            },
-        );
+    //     let status = channel_loop!(
+    //         self,
+    //         id,
+    //         Message::ChannelExitStatus { recipient, status } if id == recipient => {
+    //             break ExitStatus::Normal(status);
+    //         },
+    //         Message::ChannelExitSignal {
+    //             recipient,
+    //             signal,
+    //             core_dumped,
+    //             error_msg,
+    //             tag,
+    //         } if recipient == id => {
+    //             break ExitStatus::Interrupt {
+    //                 signal,
+    //                 core_dumped,
+    //                 error_msg,
+    //                 tag
+    //             };
+    //         },
+    //     );
 
-        let channel = self
-            .channels
-            .get_mut(&id)
-            .ok_or(Error::ub("Failed to find channel"))?;
+    //     let channel = self
+    //         .channels
+    //         .get_mut(&id)
+    //         .ok_or(Error::ub("Failed to find channel"))?;
 
-        channel.exit_status = Some(status.clone());
+    //     channel.exit_status = Some(status.clone());
 
-        Ok(status)
-    }
+    //     Ok(status)
+    // }
 
-    async fn channel_exec_wait(&mut self, id: u32, cmd: &str) -> Result<ExitStatus> {
-        self.channel_exec(id, cmd).await?;
+    // async fn channel_exec_wait(&mut self, id: u32, cmd: &str) -> Result<ExitStatus> {
+    //     self.channel_exec(id, cmd).await?;
 
-        let status = channel_loop!(
-            self,
-            id,
-            Message::ChannelExitStatus { recipient, status } if id == recipient => {
-                break ExitStatus::Normal(status);
-            },
-            Message::ChannelExitSignal {
-                recipient,
-                signal,
-                core_dumped,
-                error_msg,
-                tag
-            } if recipient == id => {
-                break ExitStatus::Interrupt {
-                    signal,
-                    core_dumped,
-                    error_msg,
-                    tag
-                };
-            },
-        );
+    //     let status = channel_loop!(
+    //         self,
+    //         id,
+    //         Message::ChannelExitStatus { recipient, status } if id == recipient => {
+    //             break ExitStatus::Normal(status);
+    //         },
+    //         Message::ChannelExitSignal {
+    //             recipient,
+    //             signal,
+    //             core_dumped,
+    //             error_msg,
+    //             tag
+    //         } if recipient == id => {
+    //             break ExitStatus::Interrupt {
+    //                 signal,
+    //                 core_dumped,
+    //                 error_msg,
+    //                 tag
+    //             };
+    //         },
+    //     );
 
-        let channel = self
-            .channels
-            .get_mut(&id)
-            .ok_or(Error::ub("Failed to find channel"))?;
+    //     let channel = self
+    //         .channels
+    //         .get_mut(&id)
+    //         .ok_or(Error::ub("Failed to find channel"))?;
 
-        channel.exit_status = Some(status.clone());
+    //     channel.exit_status = Some(status.clone());
 
-        Ok(status)
-    }
+    //     Ok(status)
+    // }
 
     async fn channel_flush_stdout_blocking(&mut self, id: u32) -> Result<()> {
         let channel = self
@@ -787,7 +1221,6 @@ where
                         channel.server.size += count;
                     }
                     Message::ChannelClose(recipient) if recipient == id => {
-                        println!("channel flush close: {}", id);
                         channel.server_close().await;
                         std::mem::take(&mut channel.stdout_buf);
                         if !channel.client.closed {
@@ -1118,30 +1551,27 @@ where
         &mut self,
         initial: u32,
         maximum: u32,
-        session: mpsc::Sender<Request>,
     ) -> Result<(Channel, ChannelInner)> {
+        let session = self.upgrade_sender()?;
         let (client, server) = self.channel_open_raw(initial, maximum).await?;
 
-        let stdout = io_channel();
-        let stderr = io_channel();
+        // let stdout = io_channel();
+        // let stderr = io_channel();
 
-        let channel = Channel::new(client.id, stdout.1, stderr.1, session);
+        let (sender, recver) = mpsc::channel(4096);
+
+        let channel = Channel::new(client.id, recver, session);
 
         let inner = ChannelInner::new(
             client, server, // Box::new(NormalChannel::new(stdout.0, stderr.0)),
-            stdout.0, stderr.0, None,
+            sender,
         );
 
         Ok((channel, inner))
     }
 
-    async fn channel_open_session(
-        &mut self,
-        initial: u32,
-        maximum: u32,
-        session: mpsc::Sender<Request>,
-    ) -> Result<Channel> {
-        let (channel, inner) = self.channel_open_normal(initial, maximum, session).await?;
+    async fn channel_open_session(&mut self, initial: u32, maximum: u32) -> Result<Channel> {
+        let (channel, inner) = self.channel_open_normal(initial, maximum).await?;
 
         self.channels.insert(inner.client.id, inner);
 
@@ -1310,19 +1740,8 @@ where
         }
     }
 
-    async fn sftp_open(
-        &mut self,
-        initial: u32,
-        maximum: u32,
-        session: mpsc::Sender<Request>,
-    ) -> Result<SFtp> {
-        let (channel, inner) = self
-            .channel_open_normal(initial, maximum, session.clone())
-            .await?;
-
-        // let (client, server) = self.channel_open_raw(initial, maximum).await?;
-
-        let server_id = inner.server.id;
+    async fn sftp_from_channel(&mut self, channel: Channel, inner: ChannelInner) -> Result<SFtp> {
+        let server_id: u32 = inner.server.id;
         let client_id = inner.client.id;
 
         // self.channels.insert(channel.id, inner);
@@ -1433,5 +1852,11 @@ where
                 }
             }
         }
+    }
+
+    async fn sftp_open(&mut self, initial: u32, maximum: u32) -> Result<SFtp> {
+        let (channel, inner) = self.channel_open_normal(initial, maximum).await?;
+
+        self.sftp_from_channel(channel, inner).await
     }
 }

@@ -68,7 +68,8 @@ async fn main() {
     use flatline::session::Session;
     use flatline::handshake::Config;
     use tokio::net::TcpStream;
-    use flatline::msg::{Userauth, ExitStatus};
+    use flatline::session::Userauth;
+    use flatline::channel::ExitStatus;
     let socket = TcpStream::connect("192.168.8.190:22").await.unwrap();
     let config = Config::deafult_with_behavior();
     let mut session = Session::handshake(config, socket).await.unwrap();
@@ -78,10 +79,17 @@ async fn main() {
     assert!(matches!(status, Userauth::Success));
 
     let mut channel = session.channel_open_default().await.unwrap();
-    let status = channel.exec_and_wait("echo \"hello\"").await.unwrap();
-    assert!(matches!(status, ExitStatus::Normal(0)));
-    let buf = channel.read().await.unwrap();
-    assert_eq!(buf, b"hello\n");
+    channel.exec("echo \"hello\"").await.unwrap();
+    loop {
+        let msg = channel.recv().await.unwrap();
+        match msg {
+            flatline::channel::Message::Close => break,
+            flatline::channel::Message::Eof => break,
+            flatline::channel::Message::Stdout(data) => assert_eq!(data, b"hello\n"),
+            flatline::channel::Message::Stderr(_) => unreachable!(),
+            flatline::channel::Message::Exit(status) => assert!(matches!(status, ExitStatus::Normal(0))),
+        }
+    }
 }
 ```
 

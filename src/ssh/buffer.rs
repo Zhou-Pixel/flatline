@@ -82,6 +82,7 @@ impl Buffer {
         vec.extend(content);
         Self(vec)
     }
+
     pub fn new() -> Self {
         Default::default()
     }

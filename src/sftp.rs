@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use byteorder::{BigEndian, ByteOrder};
 use derive_new::new;
 
-use crate::channel::Channel;
+use crate::channel::{Channel, Stream};
 use crate::error::Result;
 use crate::ssh::common::*;
+use crate::ssh::stream::BufferStream;
 use crate::{
     error::Error,
     ssh::{buffer::Buffer, common::code::*},
@@ -77,7 +78,7 @@ impl Statvfs {
 }
 
 pub struct SFtp {
-    channel: Channel,
+    channel: BufferStream<Stream>,
     request_id: u32,
     version: u32,
     ext: HashMap<String, Vec<u8>>,
@@ -86,7 +87,7 @@ pub struct SFtp {
 impl SFtp {
     pub(crate) fn new(channel: Channel, version: u32, ext: HashMap<String, Vec<u8>>) -> Self {
         Self {
-            channel,
+            channel: BufferStream::new(Stream::new(channel)),
             request_id: 0,
             version,
             ext,
@@ -459,7 +460,7 @@ impl SFtp {
     }
 
     pub async fn flush(&self) -> Result<()> {
-        self.channel.flush().await
+        self.channel.inner().inner().flush().await
     }
 
     pub fn support_posix_rename(&self) -> bool {
@@ -1182,11 +1183,11 @@ impl SFtp {
     }
 
     async fn recv(&mut self) -> Result<Packet> {
-        let mut data = self.channel.stdout.read_exact(4).await?;
+        let mut data = self.channel.read_exact(4).await?;
 
         let len = BigEndian::read_u32(&data);
 
-        data.extend(self.channel.stdout.read_exact(len as usize).await?);
+        data.extend(self.channel.read_exact(len as usize).await?);
         Packet::parse(data).ok_or(Error::invalid_format("unable to parse sftp packet"))
     }
 
@@ -1196,6 +1197,6 @@ impl SFtp {
     }
 
     async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<bool> {
-        self.channel.write(data).await
+        self.channel.inner().inner().write(data).await
     }
 }

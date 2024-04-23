@@ -1,6 +1,6 @@
 [package]
 name = "flatline"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2021"
 license = "Apache-2.0"
 description = "ssh-2.0 client library"
@@ -21,6 +21,7 @@ indexmap = "2"
 openssl = { version = "0.10.63" }
 thiserror = "1.0"
 tokio = { version = "1", features = ["io-util", "rt", "macros", "sync"] }
+tokio-util = "0.7"
 
 
 [features]

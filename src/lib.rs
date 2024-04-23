@@ -1,15 +1,15 @@
 pub mod channel;
 pub mod cipher;
 pub mod error;
+pub mod forward;
 pub mod handshake;
 pub mod keys;
-pub mod msg;
+mod msg;
 mod project;
 pub mod scp;
 pub mod session;
 pub mod sftp;
 mod ssh;
-mod utils;
 
 #[cfg(test)]
 mod test;
