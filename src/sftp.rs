@@ -163,7 +163,7 @@ pub struct Attributes {
 }
 
 impl Attributes {
-    fn to_bytes(&self, buffer: &mut Buffer) {
+    fn to_bytes(&self, buffer: &mut Buffer<Vec<u8>>) {
         let mut flags = 0;
         let mut tmp = Buffer::new();
         if let Some(size) = self.size {
@@ -200,7 +200,7 @@ impl Attributes {
         buffer.put_bytes(tmp);
     }
 
-    fn parse(buffer: &mut Buffer) -> Option<Self> {
+    fn parse(buffer: &mut Buffer<Vec<u8>>) -> Option<Self> {
         let flags = buffer.take_u32()?;
 
         let mut size = None;
@@ -824,7 +824,7 @@ impl SFtp {
         packet.put_u8(code);
         packet.put_bytes(bytes);
 
-        self.write(packet).await?;
+        self.write(packet.into_vec()).await?;
         Ok(())
     }
 

@@ -356,7 +356,7 @@ where
     // }
 
     pub async fn recv_packet(&mut self) -> Result<Packet> {
-        let mut func = |mut data: Buffer, mac: Option<Vec<u8>>| {
+        let mut func = |mut data: Buffer<Vec<u8>>, mac: Option<Vec<u8>>| {
             let (len, data) = data.take_one()?;
 
             let mut data = Buffer::from_vec(data);

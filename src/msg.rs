@@ -190,8 +190,8 @@ pub(crate) enum Message {
 }
 
 impl Message {
-    pub fn parse(payload: impl Into<Vec<u8>>) -> std::result::Result<Self, String> {
-        let mut buffer = Buffer::from_vec(payload.into());
+    pub fn parse(payload: &[u8]) -> std::result::Result<Self, String> {
+        let buffer = Buffer::from_slice(payload);
 
         let mut detail = "unable to parse a server message".to_string();
 
@@ -215,8 +215,8 @@ impl Message {
                     let (_, desc) = buffer.take_one()?;
                     let (_, tag) = buffer.take_one()?;
 
-                    let desc = utf8(&desc)?;
-                    let tag = utf8(&tag)?;
+                    let desc = utf8(desc)?;
+                    let tag = utf8(tag)?;
 
                     Some(Self::ChannelOpenFailure {
                         recipient,
@@ -229,7 +229,7 @@ impl Message {
                 SSH_MSG_USERAUTH_FAILURE => {
                     let (_, methods) = buffer.take_one()?;
 
-                    let methods = utf8(&methods)?.split(',').map(|v| v.to_owned()).collect();
+                    let methods = utf8(methods)?.split(',').map(|v| v.to_owned()).collect();
 
                     let partial = buffer.take_u8()? != 0;
 
@@ -264,14 +264,14 @@ impl Message {
 
                         let mut hostkeys = vec![];
                         while buffer.len() != 0 {
-                            hostkeys.push(buffer.take_one()?.1);
+                            hostkeys.push(buffer.take_one()?.1.to_vec());
                         }
                         Some(Self::HostKeysOpenSsh {
                             want_reply,
                             hostkeys,
                         })
                     } else {
-                        detail = format!("unknown global reqeust: {:?}", utf8(&line)?);
+                        detail = format!("unknown global reqeust: {:?}", utf8(line)?);
                         // Err(Error::ssh_packet_parse(format!(
                         //     "unknown global reqeust: {:?}",
                         //     String::from_utf8(line)?
@@ -282,14 +282,14 @@ impl Message {
                 SSH_MSG_CHANNEL_DATA => {
                     let recipient = buffer.take_u32()?;
 
-                    let (_, data) = buffer.take_one()?;
+                    let data = buffer.take_one()?.1.to_vec();
                     Some(Self::ChannelStdoutData { recipient, data })
                 }
                 SSH_MSG_CHANNEL_EXTENDED_DATA => {
                     let recipient = buffer.take_u32()?;
                     let code = buffer.take_u32()?;
                     let len = buffer.take_u32()?;
-                    let data = buffer.take_bytes(len as usize)?;
+                    let data = buffer.take_bytes(len as usize)?.to_vec();
                     if code == SSH_EXTENDED_DATA_STDERR {
                         Some(Self::ChannelStderrData { recipient, data })
                     } else {
@@ -343,9 +343,9 @@ impl Message {
                         let (_, error_msg) = buffer.take_one()?;
                         let (_, tag) = buffer.take_one()?;
 
-                        let signal = Signal(utf8(&signal)?);
-                        let error_msg = utf8(&error_msg)?;
-                        let tag = utf8(&tag)?;
+                        let signal = Signal(utf8(signal)?);
+                        let error_msg = utf8(error_msg)?;
+                        let tag = utf8(tag)?;
 
                         Some(Self::ChannelExitSignal {
                             recipient,
@@ -368,8 +368,8 @@ impl Message {
                     let (_, msg) = buffer.take_one()?;
                     let (_, tag) = buffer.take_one()?;
 
-                    let msg = utf8(&msg)?;
-                    let tag = utf8(&tag)?;
+                    let msg = utf8(msg)?;
+                    let tag = utf8(tag)?;
                     Some(Self::UserauthBanner { msg, tag })
                 }
                 SSH_MSG_DEBUG => {
@@ -377,8 +377,8 @@ impl Message {
                     let (_, msg) = buffer.take_one()?;
                     let (_, tag) = buffer.take_one()?;
 
-                    let msg = utf8(&msg)?;
-                    let tag = utf8(&tag)?;
+                    let msg = utf8(msg)?;
+                    let tag = utf8(tag)?;
 
                     Some(Self::Debug {
                         always_display,
@@ -393,8 +393,8 @@ impl Message {
 
                     let (_, tag) = buffer.take_one()?;
 
-                    let description = utf8(&description)?;
-                    let tag = utf8(&tag)?;
+                    let description = utf8(description)?;
+                    let tag = utf8(tag)?;
 
                     Some(Self::Disconnect {
                         reason,
@@ -402,8 +402,8 @@ impl Message {
                         tag,
                     })
                 }
-                SSH_MSG_IGNORE => Some(Self::Ignore(buffer.take_one()?.1)),
-                SSH2_MSG_PING => Some(Self::Ping(buffer.take_one()?.1)),
+                SSH_MSG_IGNORE => Some(Self::Ignore(buffer.take_one()?.1.to_vec())),
+                SSH2_MSG_PING => Some(Self::Ping(buffer.take_one()?.1.to_vec())),
                 SSH_MSG_CHANNEL_OPEN => {
                     let cmd = buffer.take_one()?.1;
                     if cmd == b"forwarded-tcpip" {
@@ -411,11 +411,11 @@ impl Message {
                         let initial = buffer.take_u32()?;
                         let maximum = buffer.take_u32()?;
                         let c_address = buffer.take_one()?.1;
-                        let c_address = utf8(&c_address)?;
+                        let c_address = utf8(c_address)?;
                         let c_port = buffer.take_u32()?;
 
                         let o_address = buffer.take_one()?.1;
-                        let o_address = utf8(&o_address)?;
+                        let o_address = utf8(o_address)?;
                         let o_port = buffer.take_u32()?;
 
                         Some(Self::ForwardTcpIp {

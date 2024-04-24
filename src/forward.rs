@@ -2,22 +2,22 @@ use std::{
     io,
     mem::{self, ManuallyDrop},
     pin::{pin, Pin},
-    task::Poll,
+    task::{Context, Poll},
 };
 
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncWrite, ReadBuf},
     sync::{mpsc, oneshot},
 };
 
 use crate::{channel::Channel, msg::Request};
 use crate::{
-    channel::Stream,
+    channel::Stream as ChannelStream,
     error::{Error, Result},
 };
 
-pub struct Socket {
-    channel: Stream,
+pub struct Stream {
+    channel: ChannelStream,
     address: String,
     port: u32,
 }
@@ -31,20 +31,20 @@ pub const LOCALHOST: &str = "localhost";
 pub const IPV4_LOCALHOST: &str = "127.0.0.1";
 pub const IPV6_LOCALHOST: &str = "::1";
 
-impl AsyncRead for Socket {
+impl AsyncRead for Stream {
     fn poll_read(
         mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         pin!(&mut self.channel).poll_read(cx, buf)
     }
 }
 
-impl AsyncWrite for Socket {
+impl AsyncWrite for Stream {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<StdResult<usize, io::Error>> {
         pin!(&mut self.channel).poll_write(cx, buf)
@@ -52,23 +52,23 @@ impl AsyncWrite for Socket {
 
     fn poll_flush(
         mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut Context<'_>,
     ) -> Poll<StdResult<(), io::Error>> {
         pin!(&mut self.channel).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        cx: &mut Context<'_>,
     ) -> Poll<StdResult<(), io::Error>> {
         pin!(&mut self.channel).poll_shutdown(cx)
     }
 }
 
-impl Socket {
+impl Stream {
     pub(crate) fn new(channel: Channel, address: impl Into<String>, port: u32) -> Self {
         Self {
-            channel: Stream::new(channel),
+            channel: ChannelStream::new(channel),
             address: address.into(),
             port,
         }
@@ -85,7 +85,7 @@ impl Socket {
 
 pub struct Listener {
     session: ManuallyDrop<mpsc::Sender<Request>>,
-    recver: ManuallyDrop<mpsc::Receiver<Socket>>,
+    recver: ManuallyDrop<mpsc::Receiver<Stream>>,
     address: ManuallyDrop<String>,
     port: u32,
 }
@@ -105,7 +105,7 @@ impl Drop for Listener {
 impl Listener {
     pub(crate) fn new(
         session: mpsc::Sender<Request>,
-        recver: mpsc::Receiver<Socket>,
+        recver: mpsc::Receiver<Stream>,
         address: String,
         port: u32,
     ) -> Self {
@@ -117,7 +117,7 @@ impl Listener {
         }
     }
 
-    pub async fn accpet(&mut self) -> Result<Socket> {
+    pub async fn accpet(&mut self) -> Result<Stream> {
         self.recver.recv().await.ok_or(Error::Disconnected)
     }
 

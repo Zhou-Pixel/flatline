@@ -16,7 +16,7 @@ use crate::cipher::sign;
 use crate::error::Error;
 use crate::error::Result;
 use crate::forward::Listener;
-use crate::forward::Socket;
+use crate::forward::Stream;
 
 use super::channel::Message as ChannelMsg;
 use crate::handshake::Behavior;
@@ -142,7 +142,7 @@ impl Session {
     //     channel.stdout.recv().await.map_err(|_| Error::Disconnect)
     // }
 
-    pub async fn direct_tcpip_default(&self, remote: (impl Into<String>, u32), local: (impl Into<String>, u32)) -> Result<Socket> {
+    pub async fn direct_tcpip_default(&self, remote: (impl Into<String>, u32), local: (impl Into<String>, u32)) -> Result<Stream> {
         self.direct_tcpip(2 * 1024 * 1024, 32000, remote, local).await
     }
 
@@ -152,7 +152,7 @@ impl Session {
         maximum: u32,
         remote: (impl Into<String>, u32),
         local: (impl Into<String>, u32),
-    ) -> Result<Socket> {
+    ) -> Result<Stream> {
         let (sender, recver) = oneshot::channel();
         let address: String = remote.0.into();
         self.send_request(Request::DirectTcpip {
@@ -165,7 +165,7 @@ impl Session {
         .await?;
         let channel = recver.await??;
 
-        Ok(Socket::new(channel, address, remote.1))
+        Ok(Stream::new(channel, address, remote.1))
     }
 
     pub async fn tcpip_forward_default(
@@ -309,12 +309,13 @@ impl Session {
         recver.await?
     }
 
-    pub async fn handshake<T, B: Behavior + Send + 'static>(
+    pub async fn handshake<T, B>(
         mut config: handshake::Config<B>,
         socket: T,
     ) -> Result<Self>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        B: Behavior + Send + 'static
     {
         let mut buffer_stream = BufferStream::new(socket);
 
@@ -394,7 +395,7 @@ impl Session {
 
 #[derive(new)]
 struct ListenerInner {
-    sender: mpsc::Sender<Socket>,
+    sender: mpsc::Sender<Stream>,
     initial: u32,
     maximum: u32,
 }
@@ -439,7 +440,7 @@ where
                         }
                     }
                     packet = self.stream.recv_packet() => {
-                        let msg = Message::parse(packet?.payload).map_err(Error::invalid_format)?;
+                        let msg = Message::parse(&packet?.payload).map_err(Error::invalid_format)?;
                         self.handle_msg(msg).await?;
                     }
                 }
@@ -487,7 +488,7 @@ where
 
     async fn recv_msg(&mut self) -> Result<Message> {
         let packet = self.stream.recv_packet().await?;
-        Message::parse(packet.payload).map_err(Error::invalid_format)
+        Message::parse(&packet.payload).map_err(Error::invalid_format)
     }
 
     async fn handle_msg(&mut self, msg: Message) -> Result<()> {
@@ -660,7 +661,7 @@ where
 
                 self.channels.insert(client_id, inner);
 
-                let socket = Socket::new(channel, originator_address, originator_port);
+                let socket = Stream::new(channel, originator_address, originator_port);
                 let _ = listener.sender.send(socket).await;
             }
             None => {
@@ -987,7 +988,7 @@ where
                 None => return Err(Error::invalid_format("Invalid code")),
                 _ => {
                     let msg =
-                        Message::parse(packet.payload).map_err(Error::invalid_format)?;
+                        Message::parse(&packet.payload).map_err(Error::invalid_format)?;
 
                     self.handle_msg(msg).await?;
                 }
@@ -1038,7 +1039,7 @@ where
                 None => return Err(Error::invalid_format("Invalid code")),
                 _ => {
                     let msg =
-                        Message::parse(packet.payload).map_err(Error::invalid_format)?;
+                        Message::parse(&packet.payload).map_err(Error::invalid_format)?;
 
                     self.handle_msg(msg).await?;
                 }
@@ -1213,7 +1214,7 @@ where
             while channel.server.size == 0 {
                 let msg = {
                     let packet = self.stream.recv_packet().await?;
-                    Message::parse(packet.payload).map_err(Error::invalid_format)?
+                    Message::parse(&packet.payload).map_err(Error::invalid_format)?
                 };
 
                 match msg {
@@ -1681,7 +1682,7 @@ where
                 SSH_MSG_USERAUTH_SUCCESS => return Ok(Userauth::Success),
                 SSH_MSG_USERAUTH_PK_OK => break,
                 _ => {
-                    self.handle_msg(Message::parse(packet.payload).map_err(Error::invalid_format)?)
+                    self.handle_msg(Message::parse(&packet.payload).map_err(Error::invalid_format)?)
                         .await?;
                 }
             }

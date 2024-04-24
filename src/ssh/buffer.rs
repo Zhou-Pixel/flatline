@@ -1,58 +1,55 @@
 use std::{
-    mem::size_of,
-    ops::{Index, IndexMut},
-    slice::SliceIndex,
-    vec::IntoIter,
+    cell::Cell, mem::size_of, ops::{Index, IndexMut}
 };
 
-use byteorder::{ReadBytesExt, WriteBytesExt, BE};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt, BE};
 
 // todo: Improve performance
 #[derive(Default, Clone, Debug)]
 #[repr(transparent)]
-pub struct Buffer(Vec<u8>);
+pub struct Buffer<T>(T);
 
-impl From<Buffer> for Vec<u8> {
-    fn from(value: Buffer) -> Self {
-        value.into_vec()
-    }
-}
+// impl From<Buffer> for Vec<u8> {
+//     fn from(value: Buffer) -> Self {
+//         value.into_vec()
+//     }
+// }
 
-impl From<Vec<u8>> for Buffer {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
-    }
-}
+// impl From<Vec<u8>> for Buffer {
+//     fn from(value: Vec<u8>) -> Self {
+//         Self(value)
+//     }
+// }
 
-impl AsRef<[u8]> for Buffer {
+impl<T: AsRef<[u8]>> AsRef<[u8]> for Buffer<T> {
     fn as_ref(&self) -> &[u8] {
-        &self.0
+        self.0.as_ref()
     }
 }
-impl<I: SliceIndex<[u8]>> Index<I> for Buffer {
-    type Output = I::Output;
+impl<I, T: Index<I>> Index<I> for Buffer<T> {
+    type Output = T::Output;
 
     #[inline]
     fn index(&self, index: I) -> &Self::Output {
-        &self.0[index]
+        self.0.index(index)
     }
 }
 
-impl<I: SliceIndex<[u8]>> IndexMut<I> for Buffer {
+impl<I, T: IndexMut<I>> IndexMut<I> for Buffer<T> {
     fn index_mut(&mut self, index: I) -> &mut Self::Output {
-        &mut self.0[index]
+        self.0.index_mut(index)
     }
 }
 
-impl IntoIterator for Buffer {
-    type Item = u8;
+// impl IntoIterator for Buffer {
+//     type Item = u8;
 
-    type IntoIter = IntoIter<u8>;
+//     type IntoIter = IntoIter<u8>;
 
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
+//     fn into_iter(self) -> Self::IntoIter {
+//         self.0.into_iter()
+//     }
+// }
 
 // impl<T> Extend<T> for Buffer {
 
@@ -71,7 +68,84 @@ impl IntoIterator for Buffer {
 //     }
 // }
 
-impl Buffer {
+impl Buffer<Cell<&[u8]>> {
+    pub fn from_slice(slice: &[u8]) -> Buffer<Cell<&[u8]>> {
+        Buffer(Cell::new(slice))
+    }
+
+    pub fn take_u8(&self) -> Option<u8> {
+        if self.0.get().is_empty() {
+            None
+        } else {
+            let ret = self.0.get()[0];
+            self.0.set(&self.0.get()[1..]);
+            Some(ret)
+        }
+    }
+
+    pub fn take_u32(&self) -> Option<u32> {
+        if self.len() < size_of::<u32>() {
+            None
+        } else {
+            let mut tmp = self.0.get();
+            let ret = ReadBytesExt::read_u32::<BigEndian>(&mut tmp).unwrap();
+            self.0.set(tmp);
+            Some(ret)
+        }
+    }
+
+    // pub fn take_u64(&self) -> Option<u64> {
+    //     if self.len() < size_of::<u64>() {
+    //         None
+    //     } else {
+    //         let mut tmp = self.0.get();
+    //         let ret = ReadBytesExt::read_u64::<BigEndian>(&mut tmp).unwrap();
+    //         self.0.set(tmp);
+    //         Some(ret)
+    //     }
+    // }
+
+    pub fn take_bytes(&self, len: usize) -> Option<&[u8]> {
+        if self.0.get().len() < len {
+            None
+        } else {
+            let ret = &self.0.get()[..len];
+            self.0.set(&self.0.get()[len..]);
+            Some(ret)
+        }
+    }
+
+    pub fn take_one(&self) -> Option<(u32, &[u8])> {
+        let tmp = self.0.get();
+
+        let len = match self.take_u32() {
+            Some(len) => len,
+            None => {
+                self.0.set(tmp);
+                return None;
+            },
+        } as usize;
+
+        if self.len() < len {
+            return None;
+        }
+
+
+        let ret = &self.0.get()[..len];
+
+        self.0.set(&self.0.get()[len..]);
+
+        Some((len as u32, ret))
+
+    }
+
+   
+    pub fn len(&self) -> usize {
+        self.0.get().len()
+    }
+}
+
+impl Buffer<Vec<u8>> {
     pub fn from_one(content: impl AsRef<[u8]>) -> Self {
         let content = content.as_ref();
         let mut vec = Vec::with_capacity(content.len() + size_of::<u32>());
