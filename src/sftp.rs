@@ -3,9 +3,11 @@ use std::collections::HashMap;
 
 use byteorder::{BigEndian, ByteOrder};
 use derive_new::new;
+use tokio::sync::oneshot;
 
 use crate::channel::{Channel, Stream};
 use crate::error::Result;
+use crate::msg::Request;
 use crate::ssh::common::*;
 use crate::ssh::stream::BufferStream;
 use crate::{
@@ -459,9 +461,22 @@ impl SFtp {
         self.version
     }
 
-    pub async fn flush(&self) -> Result<()> {
-        self.channel.inner().inner().flush().await
+    pub async fn from_channel(channel: Channel) -> Result<Self> {
+        let (sender, recver) = oneshot::channel();
+
+        let session = channel.session();
+        let request = Request::SFtpFromChannel { channel, sender };
+
+        session
+            .send(request)
+            .await
+            .map_err(|_| Error::Disconnected)?;
+
+        recver.await?
     }
+    // pub async fn flush(&self) -> Result<()> {
+    //     self.channel.inner().inner().flush().await
+    //}
 
     pub fn support_posix_rename(&self) -> bool {
         self.support(OPENSSH_SFTP_EXT_POSIX_RENAME)
@@ -1196,7 +1211,10 @@ impl SFtp {
         self.request_id
     }
 
-    async fn write(&mut self, data: impl Into<Vec<u8>>) -> Result<bool> {
-        self.channel.inner().inner().write(data).await
+    async fn write(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
+        if self.channel.write(data.as_ref()).await? {
+            self.channel.flush().await?;
+        }
+        Ok(())
     }
 }

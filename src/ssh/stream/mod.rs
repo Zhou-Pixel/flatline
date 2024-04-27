@@ -63,16 +63,23 @@ impl<T> BufferStream<T> {
         }
     }
 
-    pub fn inner(&self) -> &T {
-        &self.socket
+    pub fn into_inner(self) -> T {
+        self.socket
     }
+
+    // pub fn inner(&self) -> &T {
+    //     &self.socket
+    // }
 }
 
 impl<T: AsyncWrite + Unpin> BufferStream<T> {
-    pub async fn write(&mut self, data: impl AsRef<[u8]>) -> io::Result<()> {
+    pub async fn write(&mut self, data: impl AsRef<[u8]>) -> io::Result<bool> {
         self.w_buf.put(data.as_ref());
-
-        self.socket.write_buf(&mut self.w_buf).await.map(|_| ())
+        let len = self.w_buf.len();
+        self.socket
+            .write_buf(&mut self.w_buf)
+            .await
+            .map(|write| write == len)
     }
 
     pub async fn flush(&mut self) -> io::Result<()> {
@@ -95,16 +102,16 @@ impl<T: AsyncRead + Unpin> BufferStream<T> {
         Ok(size)
     }
 
-    // pub async fn read_line_lf(&mut self) -> io::Result<Vec<u8>> {
-    //     loop {
-    //         // todo: improve performance
-    //         let pos = self.r_buf.iter().position(|&x| x == b'\n');
-    //         if let Some(pos) = pos {
-    //             return Ok(self.r_buf.split_to(pos).to_vec());
-    //         }
-    //         self.internal_read().await?;
-    //     }
-    // }
+    pub async fn read_line_lf(&mut self) -> io::Result<Vec<u8>> {
+        loop {
+            // todo: improve performance
+            let pos = self.r_buf.iter().position(|&x| x == b'\n');
+            if let Some(pos) = pos {
+                return Ok(self.r_buf.split_to(pos).to_vec());
+            }
+            self.internal_read().await?;
+        }
+    }
 
     pub async fn read_line_crlf(&mut self) -> io::Result<Vec<u8>> {
         loop {

@@ -47,6 +47,9 @@ pub enum Error {
 
     // #[error("internal error: failed to find channel")]
     // ChannelNotFound,
+    #[error("error code: {0} {1}")]
+    ScpError(u8, String),
+
     #[error("Channel was closed")]
     ChannelClosed,
 
@@ -115,6 +118,10 @@ impl Error {
     // pub fn ssh_packet_parse(tip: impl Into<String>) -> Self {
     //     Self::SshPacketParseError(tip.into())
     // }
+
+    pub fn scp_error(code: u8, tip: impl Into<String>) -> Self {
+        Self::ScpError(code, tip.into())
+    }
 
     pub fn invalid_format(tip: impl Into<String>) -> Self {
         Self::InvalidFormat(tip.into())

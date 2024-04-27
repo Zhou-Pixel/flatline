@@ -1,6 +1,5 @@
 use std::cmp::min;
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 
 use super::channel::ChannelOpenFailureReson;
@@ -142,8 +141,13 @@ impl Session {
     //     channel.stdout.recv().await.map_err(|_| Error::Disconnect)
     // }
 
-    pub async fn direct_tcpip_default(&self, remote: (impl Into<String>, u32), local: (impl Into<String>, u32)) -> Result<Stream> {
-        self.direct_tcpip(2 * 1024 * 1024, 32000, remote, local).await
+    pub async fn direct_tcpip_default(
+        &self,
+        remote: (impl Into<String>, u32),
+        local: (impl Into<String>, u32),
+    ) -> Result<Stream> {
+        self.direct_tcpip(2 * 1024 * 1024, 32000, remote, local)
+            .await
     }
 
     pub async fn direct_tcpip(
@@ -309,13 +313,10 @@ impl Session {
         recver.await?
     }
 
-    pub async fn handshake<T, B>(
-        mut config: handshake::Config<B>,
-        socket: T,
-    ) -> Result<Self>
+    pub async fn handshake<T, B>(mut config: handshake::Config<B>, socket: T) -> Result<Self>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-        B: Behavior + Send + 'static
+        B: Behavior + Send + 'static,
     {
         let mut buffer_stream = BufferStream::new(socket);
 
@@ -498,7 +499,7 @@ where
             }
             Message::ChannelWindowAdjust { recipient, count } => {
                 self.add_channel_bytes_count(recipient, count)?;
-                self.channel_flush_stdout(recipient).await?;
+                // self.channel_flush_stdout(recipient).await?;
             }
             Message::ChannelStderrData { recipient, data } => {
                 self.append_channel_stderr(recipient, data).await?;
@@ -847,11 +848,11 @@ where
                 let _ = self.session_disconnect(reson, &desc).await;
                 return true;
             }
-            Request::ChannelFlushStdout { id, sender } => {
-                let res = self.channel_flush_stdout_blocking(id).await;
+            // Request::ChannelFlushStdout { id, sender } => {
+            //     // let res = self.channel_flush_stdout_blocking(id).await;
 
-                let _ = sender.send(res);
-            }
+            //     // let _ = sender.send(res);
+            // }
             Request::ChannelReuqestShell { id, sender } => {
                 let _ = sender.send(self.channel_request_shell(id).await);
             }
@@ -987,8 +988,7 @@ where
                 }
                 None => return Err(Error::invalid_format("Invalid code")),
                 _ => {
-                    let msg =
-                        Message::parse(&packet.payload).map_err(Error::invalid_format)?;
+                    let msg = Message::parse(&packet.payload).map_err(Error::invalid_format)?;
 
                     self.handle_msg(msg).await?;
                 }
@@ -1038,8 +1038,7 @@ where
                 }
                 None => return Err(Error::invalid_format("Invalid code")),
                 _ => {
-                    let msg =
-                        Message::parse(&packet.payload).map_err(Error::invalid_format)?;
+                    let msg = Message::parse(&packet.payload).map_err(Error::invalid_format)?;
 
                     self.handle_msg(msg).await?;
                 }
@@ -1194,132 +1193,132 @@ where
     //     Ok(status)
     // }
 
-    async fn channel_flush_stdout_blocking(&mut self, id: u32) -> Result<()> {
-        let channel = self
-            .channels
-            .get_mut(&id)
-            .ok_or(Error::ub("Failed to find channel"))?;
+    // async fn channel_flush_stdout_blocking(&mut self, id: u32) -> Result<()> {
+    //     let channel = self
+    //         .channels
+    //         .get_mut(&id)
+    //         .ok_or(Error::ub("Failed to find channel"))?;
 
-        if channel.client.closed || channel.server.closed {
-            return Err(Error::ChannelClosed);
-        }
+    //     if channel.client.closed || channel.server.closed {
+    //         return Err(Error::ChannelClosed);
+    //     }
 
-        if channel.client.eof {
-            return Err(Error::ChannelEOF);
-        }
+    //     if channel.client.eof {
+    //         return Err(Error::ChannelEOF);
+    //     }
 
-        let mut msgs = VecDeque::new();
+    //     let mut msgs = VecDeque::new();
 
-        while !channel.stdout_buf.is_empty() {
-            while channel.server.size == 0 {
-                let msg = {
-                    let packet = self.stream.recv_packet().await?;
-                    Message::parse(&packet.payload).map_err(Error::invalid_format)?
-                };
+    //     while !channel.stdout_buf.is_empty() {
+    //         while channel.server.size == 0 {
+    //             let msg = {
+    //                 let packet = self.stream.recv_packet().await?;
+    //                 Message::parse(&packet.payload).map_err(Error::invalid_format)?
+    //             };
 
-                match msg {
-                    Message::ChannelWindowAdjust { recipient, count } if id == recipient => {
-                        channel.server.size += count;
-                    }
-                    Message::ChannelClose(recipient) if recipient == id => {
-                        channel.server_close().await;
-                        std::mem::take(&mut channel.stdout_buf);
-                        if !channel.client.closed {
-                            if !channel.client.eof {
-                                let mut buffer = Buffer::new();
-                                buffer.put_u8(SSH_MSG_CHANNEL_EOF);
-                                buffer.put_u32(channel.server.id);
-                                self.stream.send_payload(buffer.as_ref()).await?;
-                                channel.client.eof = true;
-                            }
-                            let mut buffer = Buffer::new();
-                            buffer.put_u8(SSH_MSG_CHANNEL_CLOSE);
-                            buffer.put_u32(channel.server.id);
+    //             match msg {
+    //                 Message::ChannelWindowAdjust { recipient, count } if id == recipient => {
+    //                     channel.server.size += count;
+    //                 }
+    //                 Message::ChannelClose(recipient) if recipient == id => {
+    //                     channel.server_close().await;
+    //                     std::mem::take(&mut channel.stdout_buf);
+    //                     if !channel.client.closed {
+    //                         if !channel.client.eof {
+    //                             let mut buffer = Buffer::new();
+    //                             buffer.put_u8(SSH_MSG_CHANNEL_EOF);
+    //                             buffer.put_u32(channel.server.id);
+    //                             self.stream.send_payload(buffer.as_ref()).await?;
+    //                             channel.client.eof = true;
+    //                         }
+    //                         let mut buffer = Buffer::new();
+    //                         buffer.put_u8(SSH_MSG_CHANNEL_CLOSE);
+    //                         buffer.put_u32(channel.server.id);
 
-                            self.stream.send_payload(buffer.as_ref()).await?;
+    //                         self.stream.send_payload(buffer.as_ref()).await?;
 
-                            channel.client.closed = true;
-                        }
-                        return Err(Error::ChannelClosed);
-                    }
-                    Message::ChannelEof(recipient) if recipient == id => {
-                        channel.server_eof().await;
-                    }
-                    Message::Disconnect {
-                        reason,
-                        description,
-                        tag,
-                    } => {
-                        if let Some(ref mut behavior) = self.behaivor {
-                            behavior.disconnect(reason, &description, &tag).await?;
-                        }
-                        return Err(Error::Disconnected);
-                    }
-                    msg => {
-                        msgs.push_back(msg);
-                    } // msg => self.handle_msg(msg).await?,
-                }
-            }
+    //                         channel.client.closed = true;
+    //                     }
+    //                     return Err(Error::ChannelClosed);
+    //                 }
+    //                 Message::ChannelEof(recipient) if recipient == id => {
+    //                     channel.server_eof().await;
+    //                 }
+    //                 Message::Disconnect {
+    //                     reason,
+    //                     description,
+    //                     tag,
+    //                 } => {
+    //                     if let Some(ref mut behavior) = self.behaivor {
+    //                         behavior.disconnect(reason, &description, &tag).await?;
+    //                     }
+    //                     return Err(Error::Disconnected);
+    //                 }
+    //                 msg => {
+    //                     msgs.push_back(msg);
+    //                 } // msg => self.handle_msg(msg).await?,
+    //             }
+    //         }
 
-            let mut buffer = Buffer::new();
+    //         let mut buffer = Buffer::new();
 
-            buffer.put_u8(SSH_MSG_CHANNEL_DATA);
+    //         buffer.put_u8(SSH_MSG_CHANNEL_DATA);
 
-            buffer.put_u32(channel.server.id);
+    //         buffer.put_u32(channel.server.id);
 
-            let len = min(channel.server.maximum, channel.server.size) as usize;
-            let len = min(channel.stdout_buf.len(), len);
-            let len = min(len, PAYLOAD_MAXIMUM_SIZE - 100);
+    //         let len = min(channel.server.maximum, channel.server.size) as usize;
+    //         let len = min(channel.stdout_buf.len(), len);
+    //         let len = min(len, PAYLOAD_MAXIMUM_SIZE - 100);
 
-            buffer.put_one(&channel.stdout_buf[..len]);
+    //         buffer.put_one(&channel.stdout_buf[..len]);
 
-            self.stream.send_payload(buffer.as_ref()).await?;
-            channel.stdout_buf.drain(..len);
-            channel.server.size -= len as u32;
-        }
+    //         self.stream.send_payload(buffer.as_ref()).await?;
+    //         channel.stdout_buf.drain(..len);
+    //         channel.server.size -= len as u32;
+    //     }
 
-        while let Some(msg) = msgs.pop_front() {
-            self.handle_msg(msg).await?;
-        }
-        Ok(())
-    }
+    //     while let Some(msg) = msgs.pop_front() {
+    //         self.handle_msg(msg).await?;
+    //     }
+    //     Ok(())
+    // }
 
-    async fn channel_flush_stdout(&mut self, id: u32) -> Result<bool> {
-        let channel = self
-            .channels
-            .get_mut(&id)
-            .ok_or(Error::ub("Failed to find channel"))?;
+    // async fn channel_flush_stdout(&mut self, id: u32) -> Result<bool> {
+    //     let channel = self
+    //         .channels
+    //         .get_mut(&id)
+    //         .ok_or(Error::ub("Failed to find channel"))?;
 
-        if channel.client.closed || channel.server.closed {
-            return Err(Error::ChannelClosed);
-        }
+    //     if channel.client.closed || channel.server.closed {
+    //         return Err(Error::ChannelClosed);
+    //     }
 
-        if channel.client.eof {
-            return Ok(channel.stdout_buf.is_empty());
-        }
+    //     if channel.client.eof {
+    //         return Ok(channel.stdout_buf.is_empty());
+    //     }
 
-        while !channel.stdout_buf.is_empty() && channel.server.size != 0 {
-            let mut buffer = Buffer::new();
+    //     while !channel.stdout_buf.is_empty() && channel.server.size != 0 {
+    //         let mut buffer = Buffer::new();
 
-            buffer.put_u8(SSH_MSG_CHANNEL_DATA);
+    //         buffer.put_u8(SSH_MSG_CHANNEL_DATA);
 
-            buffer.put_u32(channel.server.id);
+    //         buffer.put_u32(channel.server.id);
 
-            let len = min(channel.server.maximum, channel.server.size) as usize;
-            let len = min(len, PAYLOAD_MAXIMUM_SIZE - 200);
-            let len = min(channel.stdout_buf.len(), len);
+    //         let len = min(channel.server.maximum, channel.server.size) as usize;
+    //         let len = min(len, PAYLOAD_MAXIMUM_SIZE - 200);
+    //         let len = min(channel.stdout_buf.len(), len);
 
-            buffer.put_one(&channel.stdout_buf[..len]);
+    //         buffer.put_one(&channel.stdout_buf[..len]);
 
-            self.stream.send_payload(buffer.as_ref()).await?;
-            channel.stdout_buf.drain(..len);
-            channel.server.size -= len as u32;
-        }
+    //         self.stream.send_payload(buffer.as_ref()).await?;
+    //         channel.stdout_buf.drain(..len);
+    //         channel.server.size -= len as u32;
+    //     }
 
-        Ok(channel.stdout_buf.is_empty())
-    }
+    //     Ok(channel.stdout_buf.is_empty())
+    // }
 
-    async fn channel_write_stdout(&mut self, id: u32, data: &[u8]) -> Result<bool> {
+    async fn channel_write_stdout(&mut self, id: u32, data: &[u8]) -> Result<usize> {
         // let (channel, stream) = func(self)?;
         let channel = self
             .channels
@@ -1334,31 +1333,34 @@ where
             return Err(Error::ChannelEOF);
         }
 
-        channel.stdout_buf.extend(data);
+        // channel.stdout_buf.extend(data);
 
-        if data.is_empty() {
-            return Ok(true);
-        } else if channel.server.size == 0 {
-            return Ok(false);
+        // if data.is_empty() {
+        //     return Ok(0);
+        // } else if channel.server.size == 0 {
+        //     return Ok(0);
+        // }
+        let total = data.len();
+        let mut pos = 0;
+
+        while channel.server.size > 0 && pos < total {
+            let mut buffer = Buffer::new();
+
+            buffer.put_u8(SSH_MSG_CHANNEL_DATA);
+
+            buffer.put_u32(channel.server.id);
+
+            let len = min(channel.server.maximum, channel.server.size) as usize;
+            let len = min(len, PAYLOAD_MAXIMUM_SIZE - 100);
+            let len = min(total - pos, len);
+
+            buffer.put_one(&data[pos..pos + len]);
+            self.stream.send_payload(buffer.as_ref()).await?;
+            channel.server.size -= len as u32;
+            pos += len;
         }
 
-        let mut buffer = Buffer::new();
-
-        buffer.put_u8(SSH_MSG_CHANNEL_DATA);
-
-        buffer.put_u32(channel.server.id);
-
-        let len = min(channel.server.maximum, channel.server.size) as usize;
-        let len = min(len, PAYLOAD_MAXIMUM_SIZE - 100);
-        let len = min(channel.stdout_buf.len(), len);
-
-        buffer.put_one(&channel.stdout_buf[..len]);
-
-        self.stream.send_payload(buffer.as_ref()).await?;
-        channel.stdout_buf.drain(..len);
-        channel.server.size -= len as u32;
-
-        Ok(channel.stdout_buf.is_empty())
+        Ok(pos)
     }
 
     async fn channel_drop(&mut self, id: u32) -> Result<()> {
@@ -1367,9 +1369,9 @@ where
 
         if !channel.client.closed {
             if !channel.client.eof {
-                if !channel.server.closed {
-                    self.channel_flush_stdout_blocking(id).await?;
-                }
+                // if !channel.server.closed {
+                //     self.channel_flush_stdout_blocking(id).await?;
+                // }
                 let mut buffer = Buffer::new();
                 buffer.put_u8(SSH_MSG_CHANNEL_EOF);
                 buffer.put_u32(channel.server.id);
@@ -1405,18 +1407,18 @@ where
         if channel.client.eof {
             return Ok(());
         }
-        channel.client.eof = true;
 
         let mut buffer = Buffer::new();
         buffer.put_u8(SSH_MSG_CHANNEL_EOF);
         buffer.put_u32(channel.server.id);
 
-        if !channel.server.closed {
-            self.channel_flush_stdout_blocking(id).await?;
-        }
+        // if !channel.server.closed {
+        //     self.channel_flush_stdout_blocking(id).await?;
+        // }
 
         self.stream.send_payload(buffer.as_ref()).await?;
 
+        channel.client.eof = true;
         Ok(())
     }
 
@@ -1429,7 +1431,7 @@ where
         }
 
         channel.server_close().await;
-        std::mem::take(&mut channel.stdout_buf);
+        // std::mem::take(&mut channel.stdout_buf);
 
         if !channel.client.closed {
             if !channel.client.eof {
@@ -1682,8 +1684,10 @@ where
                 SSH_MSG_USERAUTH_SUCCESS => return Ok(Userauth::Success),
                 SSH_MSG_USERAUTH_PK_OK => break,
                 _ => {
-                    self.handle_msg(Message::parse(&packet.payload).map_err(Error::invalid_format)?)
-                        .await?;
+                    self.handle_msg(
+                        Message::parse(&packet.payload).map_err(Error::invalid_format)?,
+                    )
+                    .await?;
                 }
             }
         }

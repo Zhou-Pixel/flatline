@@ -16,7 +16,6 @@ use tokio::sync::oneshot;
 use tokio_util::sync::PollSender;
 
 use super::ssh::common::code::*;
-use crate::sftp::SFtp;
 
 use super::error::{Error, Result};
 use super::msg::Request;
@@ -94,11 +93,10 @@ pub struct Stream {
     poll_sender: PollSender<Request>,
 
     // write_recver: Option<oneshot::Receiver<Result<bool>>>,
-    write_state: State<bool>,
+    write_state: State<usize>,
 
     // flush_recver: Option<oneshot::Receiver<Result<()>>>,
-    flush_state: State<()>,
-
+    // flush_state: State<()>,
     stdout: BytesMut,
 
     stderr: BytesMut,
@@ -111,8 +109,12 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub(crate) fn inner(&self) -> &Channel {
-        &self.channel
+    // pub(crate) fn inner(&self) -> &Channel {
+    //     &self.channel
+    // }
+
+    pub fn into_inner(self) -> Channel {
+        self.channel
     }
 
     pub fn new(channel: Channel) -> Self {
@@ -123,7 +125,7 @@ impl Stream {
             // write_recver: None,
             write_state: State::Idle,
             // flush_recver: None,
-            flush_state: State::Idle,
+            // flush_state: State::Idle,
             stdout: BytesMut::default(),
             stderr: BytesMut::default(),
             rw_stdout: true,
@@ -180,8 +182,8 @@ impl AsyncWrite for Stream {
                     self.write_state = State::Idle;
                     // self.write_recver = None;
                     return match res {
-                        Ok(_) => Poll::Ready(Ok(buf.len())),
-                        Err(_) => Poll::Ready(Err(io::Error::new(
+                        Ok(Ok(size)) => Poll::Ready(Ok(size)),
+                        _ => Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::ConnectionAborted,
                             "Connection lost",
                         ))),
@@ -191,56 +193,8 @@ impl AsyncWrite for Stream {
         }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        loop {
-            match self.flush_state {
-                State::Idle => match ready!(self.poll_sender.poll_reserve(cx)) {
-                    Ok(_) => {
-                        self.flush_state = State::Started;
-                    }
-                    Err(_) => {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::ConnectionAborted,
-                            "Connection lost",
-                        )))
-                    }
-                },
-                State::Started => {
-                    let (sender, recver) = oneshot::channel();
-                    let request = Request::ChannelFlushStdout {
-                        id: self.channel.id,
-                        sender,
-                    };
-
-                    match self.poll_sender.send_item(request) {
-                        Ok(_) => {
-                            self.flush_state = State::Wait(recver);
-                            // self.flush_recver = Some(recver);
-                        }
-                        Err(_) => {
-                            return Poll::Ready(Err(io::Error::new(
-                                io::ErrorKind::ConnectionAborted,
-                                "Connection lost",
-                            )));
-                        }
-                    }
-                }
-                State::Wait(ref mut recver) => {
-                    // let recver = self.flush_recver.as_mut().unwrap();
-
-                    let res = ready!(Pin::new(recver).poll(cx));
-                    self.flush_state = State::Idle;
-                    // self.flush_recver = None;
-                    return match res {
-                        Ok(_) => Poll::Ready(Ok(())),
-                        Err(_) => Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::ConnectionAborted,
-                            "Connection lost",
-                        ))),
-                    };
-                }
-            }
-        }
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -412,8 +366,8 @@ impl Drop for Channel {
     }
 }
 
-use super::scp::Sender as ScpSender;
-use super::sftp::{Permissions, Timestamp};
+// use super::scp::Sender as ScpSender;
+// use super::sftp::{Permissions, Timestamp};
 
 impl Channel {
     pub(crate) fn new(
@@ -435,34 +389,34 @@ impl Channel {
         }
     }
 
-    pub async fn sftp(self) -> Result<SFtp> {
-        let (sender, recver) = oneshot::channel();
+    // pub async fn sftp(self) -> Result<SFtp> {
+    //     let (sender, recver) = oneshot::channel();
 
-        let session = (*self.session).clone();
-        let request = Request::SFtpFromChannel {
-            channel: self,
-            sender,
-        };
+    //     let session = (*self.session).clone();
+    //     let request = Request::SFtpFromChannel {
+    //         channel: self,
+    //         sender,
+    //     };
 
-        session
-            .send(request)
-            .await
-            .map_err(|_| Error::Disconnected)?;
+    //     session
+    //         .send(request)
+    //         .await
+    //         .map_err(|_| Error::Disconnected)?;
 
-        recver.await?
-    }
+    //     recver.await?
+    // }
 
-    pub async fn flush(&self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
-        let request = Request::ChannelFlushStdout {
-            id: self.id,
-            sender,
-        };
+    // pub async fn flush(&self) -> Result<()> {
+    //     let (sender, recver) = oneshot::channel();
+    //     let request = Request::ChannelFlushStdout {
+    //         id: self.id,
+    //         sender,
+    //     };
 
-        self.send_request(request).await?;
+    //     self.send_request(request).await?;
 
-        recver.await?
-    }
+    //     recver.await?
+    // }
 
     // pub async fn is_server_closed(&self) -> bool {
     //     self.stdout.is_closed().await
@@ -472,49 +426,49 @@ impl Channel {
     //     self.stdout.is_eof().await
     // }
 
-    pub async fn scp_sender(
-        mut self,
-        path: &str,
-        size: usize,
-        permissions: Permissions,
-        time: Option<Timestamp>,
-    ) -> Result<ScpSender> {
-        let cmd = match time {
-            Some(_) => format!("scp -pt {}", path),
-            None => format!("scp -t {}", path),
-        };
+    // pub async fn scp_sender(
+    //     mut self,
+    //     path: &str,
+    //     size: usize,
+    //     permissions: Permissions,
+    //     time: Option<Timestamp>,
+    // ) -> Result<ScpSender> {
+    //     let cmd = match time {
+    //         Some(_) => format!("scp -pt {}", path),
+    //         None => format!("scp -t {}", path),
+    //     };
 
-        self.exec(cmd).await?;
+    //     self.exec(cmd).await?;
 
-        let response = self.read().await?;
+    //     let response = self.read().await?;
 
-        if response.len() != 1 || response[0] != 0 {
-            return Err(Error::invalid_format("invalid scp response"));
-        }
+    //     if response.len() != 1 || response[0] != 0 {
+    //         return Err(Error::invalid_format("invalid scp response"));
+    //     }
 
-        if let Some(time) = time {
-            let send = format!("T{} 0 {} 0\n", time.mtime, time.atime);
-            self.write(send).await?;
-            let response = self.read().await?;
+    //     if let Some(time) = time {
+    //         let send = format!("T{} 0 {} 0\n", time.mtime, time.atime);
+    //         self.write(send).await?;
+    //         let response = self.read().await?;
 
-            if response.len() != 1 || response[0] != 0 {
-                return Err(Error::invalid_format("invalid scp response"));
-            }
-        }
+    //         if response.len() != 1 || response[0] != 0 {
+    //             return Err(Error::invalid_format("invalid scp response"));
+    //         }
+    //     }
 
-        let filename = path.split('/').last().unwrap_or(path);
-        let send = format!("C0{:0o} {} {}\n", permissions.bits(), size, filename);
+    //     let filename = path.split('/').last().unwrap_or(path);
+    //     let send = format!("C0{:0o} {} {}\n", permissions.bits(), size, filename);
 
-        self.write(send).await?;
+    //     self.write(send).await?;
 
-        let response = self.read().await?;
+    //     let response = self.read().await?;
 
-        if response.len() != 1 || response[0] != 0 {
-            return Err(Error::invalid_format("invalid scp response"));
-        }
+    //     if response.len() != 1 || response[0] != 0 {
+    //         return Err(Error::invalid_format("invalid scp response"));
+    //     }
 
-        Ok(ScpSender::new(self))
-    }
+    //     Ok(ScpSender::new(self))
+    // }
 
     async fn close_without_drop(&self) -> Result<()> {
         let (sender, recver) = oneshot::channel();
@@ -608,19 +562,19 @@ impl Channel {
     //     self.stdout.try_read()
     // }
 
-    async fn read(&mut self) -> Result<Vec<u8>> {
-        loop {
-            match self.recv().await? {
-                Message::Close => return Err(Error::ChannelClosed),
-                Message::Eof => return Err(Error::ChannelEOF),
-                Message::Stdout(data) => return Ok(data),
-                Message::Stderr(_) => {}
-                Message::Exit(_) => {
-                    return Err(Error::ProtocolError("Unexpected status".to_string()))
-                }
-            }
-        }
-    }
+    // pub(crate) async fn read(&mut self) -> Result<Vec<u8>> {
+    //     loop {
+    //         match self.recv().await? {
+    //             Message::Close => return Err(Error::ChannelClosed),
+    //             Message::Eof => return Err(Error::ChannelEOF),
+    //             Message::Stdout(data) => return Ok(data),
+    //             Message::Stderr(_) => {}
+    //             Message::Exit(_) => {
+    //                 return Err(Error::ProtocolError("Unexpected status".to_string()))
+    //             }
+    //         }
+    //     }
+    // }
 
     // pub fn try_read_stderr(&mut self) -> Result<Option<Vec<u8>>> {
     //     self.stderr.try_read()
@@ -630,7 +584,7 @@ impl Channel {
     //     self.stderr.read().await
     // }
 
-    pub async fn write(&self, data: impl Into<Vec<u8>>) -> Result<bool> {
+    pub async fn write(&self, data: impl Into<Vec<u8>>) -> Result<usize> {
         let data: Vec<u8> = data.into();
         let (sender, recver) = oneshot::channel();
         let request = Request::ChannelWriteStdout {
@@ -673,6 +627,10 @@ impl Channel {
             .await
             .map_err(|_| Error::Disconnected)
     }
+
+    pub(crate) fn session(&self) -> mpsc::Sender<Request> {
+        (*self.session).clone()
+    }
 }
 
 pub(crate) struct Endpoint {
@@ -704,9 +662,8 @@ pub(crate) struct ChannelInner {
     // pub(crate) stdout: IOSender,
     // pub(crate) stderr: IOSender,
     pub(crate) sender: mpsc::Sender<Message>,
-
-    #[new(default)]
-    pub(crate) stdout_buf: Vec<u8>,
+    // #[new(default)]
+    // pub(crate) stdout_buf: Vec<u8>,
     // pub(crate) exit_status: Option<ExitStatus>,
 }
 

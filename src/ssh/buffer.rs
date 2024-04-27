@@ -1,5 +1,7 @@
 use std::{
-    cell::Cell, mem::size_of, ops::{Index, IndexMut}
+    cell::Cell,
+    mem::size_of,
+    ops::{Index, IndexMut},
 };
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt, BE};
@@ -123,23 +125,20 @@ impl Buffer<Cell<&[u8]>> {
             None => {
                 self.0.set(tmp);
                 return None;
-            },
+            }
         } as usize;
 
         if self.len() < len {
             return None;
         }
 
-
         let ret = &self.0.get()[..len];
 
         self.0.set(&self.0.get()[len..]);
 
         Some((len as u32, ret))
-
     }
 
-   
     pub fn len(&self) -> usize {
         self.0.get().len()
     }

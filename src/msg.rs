@@ -73,7 +73,7 @@ pub(crate) enum Request {
     ChannelWriteStdout {
         id: u32,
         data: Vec<u8>,
-        sender: oneshot::Sender<Result<bool>>,
+        sender: oneshot::Sender<Result<usize>>,
     },
     ChannelSetEnv {
         id: u32,
@@ -90,10 +90,10 @@ pub(crate) enum Request {
         id: u32,
         sender: oneshot::Sender<Result<()>>,
     },
-    ChannelFlushStdout {
-        id: u32,
-        sender: oneshot::Sender<Result<()>>,
-    },
+    // ChannelFlushStdout {
+    //     id: u32,
+    //     sender: oneshot::Sender<Result<()>>,
+    // },
     ChannelReuqestShell {
         id: u32,
         sender: oneshot::Sender<Result<()>>,

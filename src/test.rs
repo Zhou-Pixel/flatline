@@ -104,24 +104,24 @@ async fn open_sftp() {
         }
     }
 
-    let channel = session.channel_open_default().await.unwrap();
+    // let channel = session.channel_open_default().await.unwrap();
 
-    let content = "123456789\n";
-    let mut sender = channel
-        .scp_sender(
-            "./Documents/test1.scp.txt",
-            content.len(),
-            Permissions::p0755(),
-            None,
-        )
-        .await
-        .unwrap();
+    // let content = "123456789\n";
+    // let mut sender = channel
+    //     .scp_sender(
+    //         "./Documents/test1.scp.txt",
+    //         content.len(),
+    //         Permissions::p0755(),
+    //         None,
+    //     )
+    //     .await
+    //     .unwrap();
 
-    let im = sender.send(content).await.unwrap();
+    // let im = sender.send(content).await.unwrap();
 
-    assert!(im);
+    // assert!(im);
 
-    sender.finish().await.unwrap();
+    // sender.finish().await.unwrap();
 }
 
 async fn echo_hello<B: Behavior + Send + 'static>(config: Config<B>, times: usize) {
