@@ -1,4 +1,4 @@
-use std::{io, string::FromUtf8Error};
+use std::{io, str::Utf8Error};
 
 use super::channel::ChannelOpenFailureReson;
 use openssl::error::ErrorStack;
@@ -19,7 +19,7 @@ pub enum Error {
     UndefinedBehavior(String),
 
     #[error("Failed to Decode binary data as utf8")]
-    Utf8Error(#[from] FromUtf8Error),
+    Utf8Error(#[from] Utf8Error),
 
     #[error("The peer does not support ssh2")]
     Ssh2Unsupport,
@@ -47,8 +47,8 @@ pub enum Error {
 
     // #[error("internal error: failed to find channel")]
     // ChannelNotFound,
-    #[error("error code: {0} {1}")]
-    ScpError(u8, String),
+    #[error("error code: {0:?} {1}")]
+    ScpError(Option<u8>, String),
 
     #[error("Channel was closed")]
     ChannelClosed,
@@ -119,7 +119,7 @@ impl Error {
     //     Self::SshPacketParseError(tip.into())
     // }
 
-    pub fn scp_error(code: u8, tip: impl Into<String>) -> Self {
+    pub fn scp_error(code: Option<u8>, tip: impl Into<String>) -> Self {
         Self::ScpError(code, tip.into())
     }
 

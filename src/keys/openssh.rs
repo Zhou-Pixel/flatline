@@ -27,7 +27,7 @@ impl Default for OpenSSH {
 
 impl super::KeyParser for OpenSSH {
     fn parse_publickey(&self, binary: &[u8]) -> Result<PublicKey> {
-        let content = String::from_utf8(binary.to_vec())?;
+        let content = std::str::from_utf8(binary)?;
 
         let parts: Vec<_> = content.trim().split(' ').collect();
 
@@ -135,7 +135,7 @@ impl super::KeyParser for OpenSSH {
 
                     let mut cipher = self
                         .cipher
-                        .get(String::from_utf8(cipher)?.as_str())
+                        .get(std::str::from_utf8(&cipher)?)
                         .ok_or(Error::invalid_format("unsupport cipher type"))?
                         .create();
 
@@ -319,15 +319,15 @@ impl super::KeyParser for OpenSSH {
         } else {
             return Err(Error::invalid_format(format!(
                 "unsupport key type => {}",
-                String::from_utf8(keytype)?
+                String::from_utf8(keytype).map_err(|e| e.utf8_error())?
             )));
         };
 
         let comment = section.take_one().ok_or_else(invalid_key_format)?.1;
-        let comment = String::from_utf8(comment)?;
+        let comment = String::from_utf8(comment).map_err(|e| e.utf8_error())?;
 
         Ok(PrivateKey::new(
-            String::from_utf8(keytype)?,
+            String::from_utf8(keytype).map_err(|e| e.utf8_error())?,
             public,
             private,
             comment,

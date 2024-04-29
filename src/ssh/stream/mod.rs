@@ -54,12 +54,28 @@ pub struct BufferStream<T> {
     w_buf: BytesMut,
 }
 
+// impl<T: AsyncRead + Unpin> AsyncRead for BufferStream<T> {
+//     fn poll_read(
+//         mut self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//         buf: &mut ReadBuf<'_>,
+//     ) -> Poll<io::Result<()>> {
+//         if !self.r_buf.is_empty() {
+//             let len = min(buf.remaining(), self.r_buf.len());
+//             buf.put(self.r_buf.split_to(len));
+//             return Poll::Ready(Ok(()));
+//         }
+//         Pin::new(&mut self.socket).poll_read(cx, buf)
+//     }
+// }
+
+
 impl<T> BufferStream<T> {
     pub fn new(socket: T) -> Self {
         Self {
             socket,
-            r_buf: BytesMut::new(),
-            w_buf: BytesMut::new(),
+            r_buf: BytesMut::with_capacity(1024 * 40),
+            w_buf: BytesMut::with_capacity(1024 * 40),
         }
     }
 
@@ -67,6 +83,17 @@ impl<T> BufferStream<T> {
         self.socket
     }
 
+    pub fn inner_mut(&mut self) -> &mut T {
+        &mut self.socket
+    }
+
+    pub fn take_read_bytes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.r_buf).to_vec()
+    }
+
+    pub fn take_write_bytes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.w_buf).to_vec()
+    }
     // pub fn inner(&self) -> &T {
     //     &self.socket
     // }
@@ -107,7 +134,7 @@ impl<T: AsyncRead + Unpin> BufferStream<T> {
             // todo: improve performance
             let pos = self.r_buf.iter().position(|&x| x == b'\n');
             if let Some(pos) = pos {
-                return Ok(self.r_buf.split_to(pos).to_vec());
+                return Ok(self.r_buf.split_to(pos + 1).to_vec());
             }
             self.internal_read().await?;
         }
@@ -133,12 +160,14 @@ impl<T: AsyncRead + Unpin> BufferStream<T> {
     //     Ok(take(&mut self.r_buf).to_vec())
     // }
 
-    // pub async fn read_buf(&mut self) -> io::Result<Vec<u8>> {
-    //     if self.r_buf.is_empty() {
-    //         self.socket.read_buf(&mut self.r_buf).await?;
-    //     }
-    //     Ok(take(&mut self.r_buf).to_vec())
-    // }
+    pub async fn read_buf(&mut self) -> io::Result<Vec<u8>> {
+        if self.r_buf.is_empty() {
+            self.socket.read_buf(&mut self.r_buf).await?;
+        }
+        let ret = self.r_buf.to_vec();
+        self.r_buf.clear();
+        Ok(ret)
+    }
 
     pub async fn read_exact(&mut self, size: usize) -> io::Result<Vec<u8>> {
         while self.r_buf.len() < size {

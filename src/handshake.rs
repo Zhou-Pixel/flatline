@@ -196,12 +196,12 @@ pub(crate) async fn banner_exchange<T: AsyncWrite + AsyncRead + Unpin>(
         count += line.len();
         if line.starts_with(b"SSH-2.0") || line.starts_with(b"SSH-1.99") {
             // self.server_info.banner = Some(line);
-            return Ok((String::from_utf8(line)?, lines));
+            return Ok((String::from_utf8(line).map_err(|e| e.utf8_error())?, lines));
         } else if line.starts_with(b"SSH-") {
             // anyhow::bail!("server doesn't support ssh2");
             return Err(Error::Ssh2Unsupport);
         }
-        lines.push(String::from_utf8(line)?);
+        lines.push(String::from_utf8(line).map_err(|e| e.utf8_error())?);
     }
 }
 

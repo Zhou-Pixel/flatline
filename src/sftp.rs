@@ -757,13 +757,13 @@ impl SFtp {
 
                 let mut unames = vec![];
                 while let Some(user) = usernames.take_one() {
-                    unames.push(String::from_utf8(user.1)?);
+                    unames.push(String::from_utf8(user.1).map_err(|e| e.utf8_error())?);
                 }
 
                 let mut gnames = vec![];
 
                 while let Some(group) = groupnames.take_one() {
-                    gnames.push(String::from_utf8(group.1)?)
+                    gnames.push(String::from_utf8(group.1).map_err(|e| e.utf8_error())?)
                 }
 
                 Ok((unames, gnames))

@@ -535,7 +535,7 @@ impl Signature for Ecdsa<Private> {
         }
 
         let nid = key.take_one().ok_or_else(invalid_key_format)?.1;
-        if self.name.ends_with(&String::from_utf8(nid)?) {
+        if self.name.ends_with(std::str::from_utf8(&nid)?) {
             return Err(invalid_key_format());
         }
 
@@ -590,7 +590,7 @@ impl Verify for Ecdsa<Public> {
 
         let id = key.take_one().ok_or_else(invalid_key_format)?.1;
 
-        if !self.name.ends_with(&String::from_utf8(id)?) {
+        if !self.name.ends_with(std::str::from_utf8(&id)?) {
             return Err(invalid_key_format());
         }
 

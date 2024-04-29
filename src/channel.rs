@@ -72,13 +72,25 @@ pub enum ExitStatus {
     },
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub enum Message {
     Close,
     Eof,
     Stdout(Vec<u8>),
     Stderr(Vec<u8>),
     Exit(ExitStatus),
+}
+
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Close => write!(f, "Message::Close"),
+            Self::Eof => write!(f, "Message::Eof"),
+            Self::Stdout(arg0) => write!(f, "Message::Stdout {{ len: {} }}", arg0.len()),
+            Self::Stderr(arg0) => write!(f, "Message::Stderr {{ len: {} }}", arg0.len()),
+            Self::Exit(arg0) => write!(f, "Message::Exit ( {:?} )", arg0),
+        }
+    }
 }
 
 enum State<T> {
@@ -263,7 +275,7 @@ impl AsyncRead for Stream {
                             break;
                         }
                         Message::Stderr(data) => stderr.extend(data),
-                        Message::Exit(_) => break,
+                        Message::Exit(_) => continue,
                     };
                 }
             } else {
@@ -318,7 +330,7 @@ impl AsyncRead for Stream {
                         break;
                     }
                     Message::Stdout(data) => stdout.extend(data),
-                    Message::Exit(_) => break,
+                    Message::Exit(_) => continue,
                 };
             }
         } else {

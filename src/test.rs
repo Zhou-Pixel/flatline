@@ -7,6 +7,7 @@ use crate::handshake::Behavior;
 use crate::handshake::Config;
 use crate::handshake::DefaultBehavior;
 use crate::keys::{self, KeyParser};
+use crate::scp;
 use crate::session::Session;
 use crate::session::Userauth;
 use crate::sftp::Permissions;
@@ -104,24 +105,23 @@ async fn open_sftp() {
         }
     }
 
-    // let channel = session.channel_open_default().await.unwrap();
+    let channel = session.channel_open_default().await.unwrap();
 
-    // let content = "123456789\n";
-    // let mut sender = channel
-    //     .scp_sender(
-    //         "./Documents/test1.scp.txt",
-    //         content.len(),
-    //         Permissions::p0755(),
-    //         None,
-    //     )
-    //     .await
-    //     .unwrap();
+    let content = "123456789\n";
+    let mut sender = scp::Sender::from_channel(
+            channel,
+            "./Documents/test1.scp.txt",
+            content.len() as u64,
+            Permissions::p0755(),
+            None,
+        )
+        .await
+        .unwrap();
 
-    // let im = sender.send(content).await.unwrap();
+    sender.send(content).await.unwrap();
 
-    // assert!(im);
 
-    // sender.finish().await.unwrap();
+    sender.finish().await.unwrap();
 }
 
 async fn echo_hello<B: Behavior + Send + 'static>(config: Config<B>, times: usize) {
