@@ -1671,7 +1671,8 @@ where
                         .take_one()
                         .ok_or(Error::invalid_format("Invalid ssh packet"))?;
                     return Ok(Userauth::Failure(
-                        String::from_utf8(methods).map_err(|e| e.utf8_error())?
+                        String::from_utf8(methods)
+                            .map_err(|e| e.utf8_error())?
                             .split(',')
                             .map(|v| v.to_string())
                             .collect(),

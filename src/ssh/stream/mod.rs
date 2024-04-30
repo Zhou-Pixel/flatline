@@ -1,9 +1,5 @@
-use std::{
-    io,
-    mem::size_of,
-    // mem::take,
-    // ops::{Deref, DerefMut},
-};
+use std::fmt::Debug;
+use std::io;
 
 use super::{common::PACKET_MAXIMUM_SIZE, packet::Packet};
 
@@ -54,6 +50,17 @@ pub struct BufferStream<T> {
     w_buf: BytesMut,
 }
 
+impl<T> Debug for BufferStream<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "BufferStream {{ socket, r_buf_len: {}, w_buf_len: {} }}",
+            self.r_buf.len(),
+            self.w_buf.len()
+        )
+    }
+}
+
 // impl<T: AsyncRead + Unpin> AsyncRead for BufferStream<T> {
 //     fn poll_read(
 //         mut self: Pin<&mut Self>,
@@ -69,7 +76,6 @@ pub struct BufferStream<T> {
 //     }
 // }
 
-
 impl<T> BufferStream<T> {
     pub fn new(socket: T) -> Self {
         Self {
@@ -83,17 +89,24 @@ impl<T> BufferStream<T> {
         self.socket
     }
 
-    pub fn inner_mut(&mut self) -> &mut T {
-        &mut self.socket
-    }
+    // pub fn rbuffer(&self) -> &[u8] {
+    //     &self.r_buf
+    // }
 
-    pub fn take_read_bytes(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.r_buf).to_vec()
+    pub fn consume_read_buffer(&mut self, size: usize) {
+        drop(self.r_buf.split_to(size))
     }
+    // pub fn inner_mut(&mut self) -> &mut T {
+    //     &mut self.socket
+    // }
 
-    pub fn take_write_bytes(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.w_buf).to_vec()
-    }
+    // pub fn take_read_bytes(&mut self) -> Vec<u8> {
+    //     std::mem::take(&mut self.r_buf).to_vec()
+    // }
+
+    // pub fn take_write_bytes(&mut self) -> Vec<u8> {
+    //     std::mem::take(&mut self.w_buf).to_vec()
+    // }
     // pub fn inner(&self) -> &T {
     //     &self.socket
     // }
@@ -176,6 +189,14 @@ impl<T: AsyncRead + Unpin> BufferStream<T> {
 
         Ok(self.r_buf.split_to(size).to_vec())
     }
+
+    pub async fn fill(&mut self, len: usize) -> io::Result<&[u8]> {
+        while self.r_buf.len() < len {
+            self.internal_read().await?;
+        }
+
+        Ok(&self.r_buf[..len])
+    }
 }
 
 #[derive(Default, Debug)]
@@ -251,6 +272,7 @@ where
             client: self.client.encrypt(client.1),
             server: self.server.encrypt(server.1),
             authed: false, // kex_strict: self.kex_strict,
+            block: None,
         }
     }
 
@@ -264,20 +286,24 @@ where
     }
 
     pub async fn recv_packet(&mut self) -> Result<Packet> {
-        let size = self.stream.read_exact(size_of::<u32>()).await?;
-
-        let mut size = Buffer::from_vec(size);
-        let size = size.take_u32().unwrap();
+        // let size = self.stream.read_exact(size_of::<u32>()).await?;
+        let size = self.stream.fill(4).await?;
+        let size = u32::from_be_bytes([size[0], size[1], size[2], size[3]]);
+        // let mut size = Buffer::from_vec(size);
+        // let size = size.take_u32().unwrap();
         if size as usize > PACKET_MAXIMUM_SIZE - 4 {
             return Err(Error::invalid_format(format!(
                 "invalid packet length: {size}"
             )));
         }
 
-        let data = self.stream.read_exact(size as _).await?;
+        // let data = self.stream.read_exact(size as _).await?;
+        let data = self.stream.fill(4 + size as usize).await?;
 
-        let pakcet =
-            Packet::parse(data, None).ok_or(Error::invalid_format("can't parse packet"))?;
+        let pakcet = Packet::parse(&data[4..], None)
+            .ok_or(Error::invalid_format("Failed to parse packet"))?;
+
+        self.stream.consume_read_buffer(4 + size as usize);
 
         self.server.sequence_number = self.server.sequence_number.wrapping_add(1);
         if !pakcet.payload.is_empty()
@@ -355,7 +381,8 @@ where
     pub client: EncryptedEndpoint,
     pub server: EncryptedEndpoint,
     pub authed: bool,
-    // pub kex_strict: bool,
+
+    block: Option<Vec<u8>>, // pub kex_strict: bool,
 }
 
 // impl<T> Deref for CipherStream<T>
@@ -405,7 +432,7 @@ where
             let uncompress = self.authed || self.decode.compress_in_auth();
 
             if uncompress {
-                self.decode.update(&payload).unwrap();
+                self.decode.update(&payload).ok()?;
                 // todo: change payload len ???
                 payload = self.decode.finalize().ok()?;
             }
@@ -429,35 +456,56 @@ where
         let mut cipher_text = vec![];
 
         let (packet_size, packet, mac) = if self.decrypt.has_aad() {
-            let aad = self.stream.read_exact(4).await?;
+            // let aad = self.stream.read_exact(4).await?;
 
-            let add_clone = aad.clone();
+            let aad = self.stream.fill(4).await?;
 
-            let mut aad = Buffer::from_vec(aad);
-            let size = aad.take_u32().unwrap();
+            let size = u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]);
+
             if size as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(
-                    "Invalid packet length: {size}"
+                    "Aes: Invalid packet length: {size}"
                 )));
             }
 
-            let left = self.stream.read_exact(size as usize).await?;
+            // let left = self.stream.read_exact(size as usize).await?;
+
+            // let left = self.stream.fill(4 + size as usize).await?;
 
             let mut plain_text = vec![];
 
-            self.decrypt.update(&add_clone, None)?;
+            // self.decrypt.update(&add_clone, None)?;
 
-            self.decrypt.update(&left, Some(&mut plain_text))?;
+            // self.decrypt.update(&left, Some(&mut plain_text))?;
 
             let mac = if self.decrypt.has_tag() {
-                let tag = self.stream.read_exact(self.decrypt.tag_len()).await?;
+                let tag_len = self.decrypt.tag_len();
+                let total = 4 + size as usize + tag_len;
+                let buf = self.stream.fill(total).await?;
 
-                self.decrypt.set_authentication_tag(&tag)?;
+                self.decrypt.update(&buf[..4], None)?;
+
+                self.decrypt
+                    .update(&buf[4..4 + size as usize], Some(&mut plain_text))?;
+
+                self.decrypt
+                    .set_authentication_tag(&buf[4 + size as usize..])?;
+
+                self.stream.consume_read_buffer(total);
                 None
             } else {
-                let mac = self.stream.read_exact(mac_len).await?;
-                cipher_text.extend(add_clone);
-                cipher_text.extend(left);
+                // unreachable here
+                let buf = self.stream.fill(4 + size as usize + mac_len).await?;
+
+                self.decrypt.update(&buf[..4], None)?;
+
+                self.decrypt
+                    .update(&buf[4..4+size as usize], Some(&mut plain_text))?;
+
+                cipher_text.extend(&buf[..4 + size as usize]);
+
+                let mac = buf[4 + size as usize..].to_vec();
+                self.stream.consume_read_buffer(4 + size as usize + mac_len);
                 Some(mac)
             };
 
@@ -465,62 +513,83 @@ where
 
             (size, plain_text, mac)
         } else if self.server.mac.encrypt_then_mac() {
-            let packet_len = self.stream.read_exact(4).await?;
-            let mut packet_len = Buffer::from_vec(packet_len);
+            let packet_len = self.stream.fill(4).await?;
 
-            let packet_len = packet_len.take_u32().unwrap();
+            let packet_len =
+                u32::from_be_bytes([packet_len[0], packet_len[1], packet_len[2], packet_len[3]]);
 
             if packet_len as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(
-                    "Invalid packet length: {packet_len}"
+                    "Etm: Invalid packet length: {packet_len}"
                 )));
             }
 
-            cipher_text = self.stream.read_exact(packet_len as usize).await?;
+            let cipher = self.stream.fill(4 + packet_len as usize).await?;
+            cipher_text.extend(&cipher[4..]);
+            // cipher_text = self.stream.read_exact(packet_len as usize).await?;
 
             let mut plaint_text = vec![];
 
+            let len = 4 + packet_len as usize;
+            let mac = self.stream.fill(len + mac_len).await?;
+            let mac = mac[len..].to_vec();
+
+            // must after async/await function
             self.decrypt.update(&cipher_text, Some(&mut plaint_text))?;
             self.decrypt.finalize(&mut plaint_text)?;
 
-            let mac = self.stream.read_exact(mac_len).await?;
+            self.stream.consume_read_buffer(len + mac_len);
 
             (packet_len, plaint_text, Some(mac))
         } else {
-            // 解密最少需要一个block的数据
-            let size = self.stream.read_exact(block_size).await?;
-            cipher_text.extend(size.clone());
+            if self.block.is_none() {
+                // 解密最少需要一个block的数据
+                let size = self.stream.read_exact(block_size).await?;
 
-            let mut out_size = vec![];
-            self.decrypt.update(&size, Some(&mut out_size))?;
-            self.decrypt.finalize(&mut out_size)?;
+                let mut out_size = vec![];
+                self.decrypt.update(&size, Some(&mut out_size))?;
+                self.decrypt.finalize(&mut out_size)?;
 
-            let mut buffer_first = Buffer::from_vec(out_size);
+                self.block = Some(out_size);
 
-            // 所有block都大于等于8, 直接使用unwrap
-            let pakcet_size = buffer_first.take_u32().unwrap();
+                cipher_text.extend(size);
+            }
+
+            let block = self.block.as_ref().unwrap();
+
+            let pakcet_size = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
 
             if pakcet_size as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(
-                    "Invalid packet length: {pakcet_size}"
+                    "Normal: Invalid packet length: {pakcet_size}"
                 )));
             }
 
-            let left = self
-                .stream
-                .read_exact(pakcet_size as usize - (block_size - 4))
-                .await?;
-            cipher_text.extend(left.clone());
+            let left_len = pakcet_size as usize - (block_size - 4);
+            let left = self.stream.fill(left_len + mac_len).await?;
+
+            cipher_text.extend(left);
 
             // 解密数据
             let mut plain_text = vec![];
             // self.decrypt.reset()?;
-            self.decrypt.update(&left, Some(&mut plain_text))?;
+            self.decrypt
+                .update(&left[..left_len], Some(&mut plain_text))?;
             self.decrypt.finalize(&mut plain_text)?;
 
-            let mac = self.stream.read_exact(mac_len).await?;
-            buffer_first.extend(plain_text);
-            (pakcet_size, buffer_first.into_vec(), Some(mac))
+            // let mac = self.stream.read_exact(mac_len).await?;
+
+            // assert_eq!(mac.len(), mac_len);
+
+            // buffer_first.extend(plain_text);
+            let mut buffer = self.block.take().unwrap();
+            buffer.drain(..4);
+            buffer.extend(plain_text);
+            let mac = left[left_len..].to_vec();
+
+            self.stream.consume_read_buffer(left_len + mac_len);
+
+            (pakcet_size, buffer, Some(mac))
         };
 
         // // 读取mac的结果，准备校验
@@ -533,14 +602,12 @@ where
 
         if let Some(ref mac) = mac {
             // 计算mac所需的sqno
-            let mut sqnobuf = Buffer::new();
-            sqnobuf.put_u32(self.server.sequence_number);
-            self.server.mac.update(sqnobuf.as_ref())?;
+            self.server
+                .mac
+                .update(&self.server.sequence_number.to_be_bytes())?;
             // 计算mac
             if self.server.mac.encrypt_then_mac() {
-                let mut pbuf = Buffer::new();
-                pbuf.put_u32(packet_size);
-                self.server.mac.update(pbuf.as_ref())?;
+                self.server.mac.update(&packet_size.to_be_bytes())?;
                 self.server.mac.update(&cipher_text)?;
             } else {
                 self.server.mac.update(buffer.as_ref())?;

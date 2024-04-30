@@ -1,7 +1,7 @@
+use std::cell::Cell;
 use std::cmp::min;
 use std::collections::HashMap;
 
-use byteorder::{BigEndian, ByteOrder};
 use derive_new::new;
 use tokio::sync::oneshot;
 
@@ -202,7 +202,7 @@ impl Attributes {
         buffer.put_bytes(tmp);
     }
 
-    fn parse(buffer: &mut Buffer<Vec<u8>>) -> Option<Self> {
+    fn parse(buffer: &mut Buffer<Cell<&[u8]>>) -> Option<Self> {
         let flags = buffer.take_u32()?;
 
         let mut size = None;
@@ -241,7 +241,7 @@ impl Attributes {
                 let (_, key) = buffer.take_one()?;
                 let (_, value) = buffer.take_one()?;
 
-                extend.insert(String::from_utf8(key).ok()?, value);
+                extend.insert(String::from_utf8(key.to_vec()).ok()?, value.to_vec());
             }
         }
 
@@ -283,11 +283,11 @@ struct Packet {
 }
 
 impl Packet {
-    fn parse(data: impl Into<Vec<u8>>) -> Option<Packet> {
-        let mut data = Buffer::from_vec(data.into());
+    fn parse(data: &[u8]) -> Option<Packet> {
+        let data = Buffer::from_slice(data);
         let (_, data) = data.take_one()?;
 
-        let mut data = Buffer::from_vec(data);
+        let mut data = Buffer::from_slice(data);
 
         let code = data.take_u8()?;
         let id = data.take_u32()?;
@@ -296,7 +296,7 @@ impl Packet {
             SSH_FXP_HANDLE => {
                 let (_, handle) = data.take_one()?;
 
-                Message::FileHandle(handle)
+                Message::FileHandle(handle.to_vec())
             }
             SSH_FXP_STATUS => {
                 let status = data.take_u32()?;
@@ -305,14 +305,14 @@ impl Packet {
 
                 let (_, tag) = data.take_one()?;
 
-                let msg = String::from_utf8(msg).ok()?;
+                let msg = std::str::from_utf8(msg).ok()?.to_string();
 
-                let _tag = String::from_utf8(tag).ok()?;
+                let _tag = std::str::from_utf8(tag).ok()?.to_string();
 
                 let status = Status::from_status(status).ok()?;
                 Message::Status { status, msg, _tag }
             }
-            SSH_FXP_DATA => Message::Data(data.take_one()?.1),
+            SSH_FXP_DATA => Message::Data(data.take_one()?.1.to_vec()),
             SSH_FXP_NAME => {
                 let count = data.take_u32()?;
                 let mut res = Vec::with_capacity(count as usize);
@@ -321,9 +321,9 @@ impl Packet {
                     let (_, filename) = data.take_one()?;
                     let (_, longname) = data.take_one()?;
 
-                    let filename = String::from_utf8(filename).ok()?;
+                    let filename = std::str::from_utf8(filename).ok()?.to_string();
 
-                    let longname = String::from_utf8(longname).ok()?;
+                    let longname = std::str::from_utf8(longname).ok()?.to_string();
 
                     res.push(FileInfo::new(
                         filename,
@@ -334,7 +334,7 @@ impl Packet {
                 Message::Name(res)
             }
             SSH_FXP_ATTRS => Message::Attributes(Attributes::parse(&mut data)?),
-            SSH_FXP_EXTENDED_REPLY => Message::ExtendReply(data.into_vec()),
+            SSH_FXP_EXTENDED_REPLY => Message::ExtendReply(data.to_vec()),
             _ => return None,
         };
 
@@ -1200,10 +1200,10 @@ impl SFtp {
     async fn recv(&mut self) -> Result<Packet> {
         let mut data = self.channel.read_exact(4).await?;
 
-        let len = BigEndian::read_u32(&data);
+        let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
 
         data.extend(self.channel.read_exact(len as usize).await?);
-        Packet::parse(data).ok_or(Error::invalid_format("unable to parse sftp packet"))
+        Packet::parse(&data).ok_or(Error::invalid_format("unable to parse sftp packet"))
     }
 
     fn genarate_request_id(&mut self) -> u32 {

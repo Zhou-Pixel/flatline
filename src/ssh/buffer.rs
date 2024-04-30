@@ -4,8 +4,6 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt, BE};
-
 // todo: Improve performance
 #[derive(Default, Clone, Debug)]
 #[repr(transparent)]
@@ -75,6 +73,10 @@ impl Buffer<Cell<&[u8]>> {
         Buffer(Cell::new(slice))
     }
 
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.0.get().to_vec()
+    }
+
     pub fn take_u8(&self) -> Option<u8> {
         if self.0.get().is_empty() {
             None
@@ -89,23 +91,25 @@ impl Buffer<Cell<&[u8]>> {
         if self.len() < size_of::<u32>() {
             None
         } else {
-            let mut tmp = self.0.get();
-            let ret = ReadBytesExt::read_u32::<BigEndian>(&mut tmp).unwrap();
-            self.0.set(tmp);
+            let tmp = self.0.get();
+            let ret = u32::from_be_bytes([tmp[0], tmp[1], tmp[2], tmp[3]]);
+            self.0.set(&tmp[4..]);
             Some(ret)
         }
     }
 
-    // pub fn take_u64(&self) -> Option<u64> {
-    //     if self.len() < size_of::<u64>() {
-    //         None
-    //     } else {
-    //         let mut tmp = self.0.get();
-    //         let ret = ReadBytesExt::read_u64::<BigEndian>(&mut tmp).unwrap();
-    //         self.0.set(tmp);
-    //         Some(ret)
-    //     }
-    // }
+    pub fn take_u64(&self) -> Option<u64> {
+        if self.len() < size_of::<u64>() {
+            None
+        } else {
+            let tmp = self.0.get();
+            let ret = u64::from_be_bytes([
+                tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6], tmp[7],
+            ]);
+            self.0.set(&tmp[8..]);
+            Some(ret)
+        }
+    }
 
     pub fn take_bytes(&self, len: usize) -> Option<&[u8]> {
         if self.0.get().len() < len {
@@ -148,10 +152,8 @@ impl Buffer<Vec<u8>> {
     pub fn from_one(content: impl AsRef<[u8]>) -> Self {
         let content = content.as_ref();
         let mut vec = Vec::with_capacity(content.len() + size_of::<u32>());
-        let mut size = [0u8; size_of::<u32>()];
-        size.as_mut().write_u32::<BE>(content.len() as u32).unwrap();
 
-        vec.extend(size);
+        vec.extend((content.len() as u32).to_be_bytes());
         vec.extend(content);
         Self(vec)
     }
@@ -165,18 +167,11 @@ impl Buffer<Vec<u8>> {
     }
 
     pub fn put_u64(&mut self, num: u64) {
-        let mut buf = [0; size_of::<u64>()];
-
-        buf.as_mut().write_u64::<BE>(num).unwrap();
-
-        self.0.extend(buf);
+        self.0.extend(num.to_be_bytes());
     }
 
     pub fn put_u32(&mut self, num: u32) {
-        let mut buf = [0; size_of::<u32>()];
-        buf.as_mut().write_u32::<BE>(num).unwrap();
-        // WriteBytesExt::write_u32::<BE>(&mut buf.as_mut_slice(), num).unwrap();
-        self.0.extend(buf);
+        self.0.extend(num.to_be_bytes());
     }
 
     pub fn put_u8(&mut self, num: u8) {
@@ -188,10 +183,13 @@ impl Buffer<Vec<u8>> {
     }
 
     pub fn take_u64(&mut self) -> Option<u64> {
-        let mut buf: &[u8] = &self.0;
-        let Ok(num) = ReadBytesExt::read_u64::<BE>(&mut buf) else {
+        if self.0.len() < size_of::<u64>() {
             return None;
-        };
+        }
+
+        let num = u64::from_be_bytes([
+            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
+        ]);
 
         self.0.drain(..size_of::<u64>());
 
@@ -199,11 +197,11 @@ impl Buffer<Vec<u8>> {
     }
 
     pub fn take_u32(&mut self) -> Option<u32> {
-        let mut buf: &[u8] = &self.0;
-
-        let Ok(num) = ReadBytesExt::read_u32::<BE>(&mut buf) else {
+        if self.0.len() < size_of::<u32>() {
             return None;
-        };
+        }
+
+        let num = u32::from_be_bytes([self.0[0], self.0[1], self.0[2], self.0[3]]);
 
         self.0.drain(..size_of::<u32>());
 
@@ -232,13 +230,9 @@ impl Buffer<Vec<u8>> {
             return None;
         }
 
-        let mut buf: &[u8] = &self.0;
+        let size = u32::from_be_bytes([self.0[0], self.0[1], self.0[2], self.0[3]]);
 
-        let Ok(size) = ReadBytesExt::read_u32::<BE>(&mut buf) else {
-            return None;
-        };
-
-        if buf.len() < size as usize {
+        if self.0.len() < size as usize + 4 {
             return None;
         }
 
