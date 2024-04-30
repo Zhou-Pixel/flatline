@@ -72,7 +72,7 @@ async fn main() {
     use flatline::channel::ExitStatus;
     let socket = TcpStream::connect("192.168.8.190:22").await.unwrap();
     let config = Config::deafult_with_behavior();
-    let mut session = Session::handshake(config, socket).await.unwrap();
+    let session = Session::handshake(config, socket).await.unwrap();
 
     let status = session.userauth_password("zhou", "123456").await.unwrap();
 

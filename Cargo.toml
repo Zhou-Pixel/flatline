@@ -1,10 +1,10 @@
 [package]
 name = "flatline"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 license = "Apache-2.0"
 description = "ssh-2.0 client library"
-keywords = [ "ssh", "tokio" ]
+keywords = [ "ssh", "tokio", "async" ]
 repository = "https://github.com/Zhou-Pixel/flatline.git"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

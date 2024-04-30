@@ -189,12 +189,10 @@ impl AsyncRead for Stream {
                 buf.put_slice(&data);
                 Ok(())
             }
-            Err(_) => {
-                Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "Connection lost",
-                ))
-            }
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "Connection lost",
+            )),
         })
     }
 }

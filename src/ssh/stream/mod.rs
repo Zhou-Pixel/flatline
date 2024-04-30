@@ -500,7 +500,7 @@ where
                 self.decrypt.update(&buf[..4], None)?;
 
                 self.decrypt
-                    .update(&buf[4..4+size as usize], Some(&mut plain_text))?;
+                    .update(&buf[4..4 + size as usize], Some(&mut plain_text))?;
 
                 cipher_text.extend(&buf[..4 + size as usize]);
 
