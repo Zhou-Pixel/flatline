@@ -1212,7 +1212,7 @@ impl SFtp {
     }
 
     async fn write(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
-        if self.channel.write(data.as_ref()).await? {
+        if !self.channel.write(data.as_ref()).await? {
             self.channel.flush().await?;
         }
         Ok(())
