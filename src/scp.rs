@@ -4,7 +4,6 @@ use super::channel::Channel;
 use super::channel::Stream;
 use super::error::{Error, Result};
 use super::ssh::stream::BufferStream;
-use derive_new::new;
 
 impl BufferStream<Stream> {
     async fn check_scp_response(&mut self) -> Result<()> {
@@ -92,7 +91,6 @@ fn shell_quote_filename(path: &str) -> String {
     String::from_utf8(dest).unwrap()
 }
 
-#[derive(new)]
 pub struct Sender {
     channel: BufferStream<Stream>,
 }
@@ -107,6 +105,10 @@ impl Sender {
     //     Ok(self.channel.inner_mut())
     // }
 
+    fn new(channel: BufferStream<Stream>) -> Self {
+        Self { channel }
+    }
+
     pub async fn send(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
         if self.channel.write(data).await? {
             self.channel.flush().await?;
@@ -117,7 +119,7 @@ impl Sender {
     pub async fn finish(mut self) -> Result<()> {
         self.channel.write([0]).await?;
         self.channel.flush().await?;
-        self.channel.into_inner().into_inner().close().await?;
+        self.channel.into_inner().close().await?;
         Ok(())
     }
 
@@ -143,7 +145,7 @@ impl Sender {
             channel.check_scp_response().await?;
         }
 
-        let filename = path.split('/').last().unwrap_or(&path);
+        let filename = path.split('/').last().unwrap_or(path);
         let send = format!("C0{:0o} {} {}\n", permissions.bits(), size, filename);
 
         channel.write(send).await?;
@@ -162,40 +164,7 @@ pub struct Receiver {
     pos: u64,
 }
 
-
-
-// impl AsyncRead for Receiver {
-//     fn poll_read(
-//         mut self: Pin<&mut Self>,
-//         cx: &mut task::Context<'_>,
-//         buf: &mut tokio::io::ReadBuf<'_>,
-//     ) -> Poll<io::Result<()>> {
-//         let len = buf.remaining();
-//         match Pin::new(self.channel.inner_mut()).poll_read(cx, buf) {
-//             Poll::Ready(res) => {
-//                 let read = len - buf.remaining();
-//                 self.pos += read as u64;
-
-//                 if self.pos == self.size {
-//                     buf.set_filled(buf.filled().len() - 1);
-//                 }
-//                 Poll::Ready(res)
-//             },
-//             Poll::Pending => Poll::Pending,
-//         }
-//     }
-// }
-
 impl Receiver {
-    
-    // pub fn reader(&mut self) -> (Vec<u8>, &mut impl AsyncRead) {
-    //     let bytes = self.channel.take_read_bytes();
-
-    //     self.pos += bytes.len() as u64;
-
-    //     (bytes, self)
-    // }
-
     pub async fn recv(&mut self) -> Result<Vec<u8>> {
         let mut bytes = self.channel.read_buf().await?;
 
@@ -293,7 +262,7 @@ impl Receiver {
             .parse::<u64>()
             .map_err(|e| Error::scp_error(None, e.to_string()))?;
 
-        // first zero is to start reading, second one is to end reading
+        // the first zero is to start reading, the second one is to end reading
         channel.write([0; 2]).await?;
 
         Ok(Self {

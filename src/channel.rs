@@ -1,8 +1,10 @@
+use super::ssh::common::code::*;
 use bytes::BytesMut;
 use derive_new::new;
 use std::cmp::min;
 use std::future::Future;
 use std::io;
+use std::mem::transmute;
 use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::task::ready;
@@ -13,12 +15,11 @@ use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio_util::sync::PollSender;
-
-use super::ssh::common::code::*;
 
 use super::error::{Error, Result};
 use super::msg::Request;
+
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -93,27 +94,20 @@ impl std::fmt::Debug for Message {
     }
 }
 
-enum State<T> {
-    Idle,
-    Started,
-    Wait(oneshot::Receiver<Result<T>>),
-}
-
 pub struct Stream {
-    channel: Channel,
+    channel: Box<Channel>, // boxed due to self referencing
 
-    poll_sender: PollSender<Request>,
+    // be careful, self referencing here
+    read_future: Option<BoxFuture<'static, Result<Vec<u8>>>>,
 
-    // write_recver: Option<oneshot::Receiver<Result<bool>>>,
-    write_state: State<usize>,
+    // be careful, self referencing here
+    write_future: Option<BoxFuture<'static, Result<usize>>>,
 
-    // flush_recver: Option<oneshot::Receiver<Result<()>>>,
-    // flush_state: State<()>,
     stdout: BytesMut,
 
     stderr: BytesMut,
 
-    rw_stdout: bool,
+    pub rw_stdout: bool,
 
     closed: bool,
 
@@ -121,29 +115,21 @@ pub struct Stream {
 }
 
 impl Stream {
-    // pub(crate) fn inner(&self) -> &Channel {
-    //     &self.channel
-    // }
-
-    pub fn into_inner(self) -> Channel {
-        self.channel
-    }
-
     pub fn new(channel: Channel) -> Self {
-        let poll_sender = PollSender::new((*channel.session).clone());
         Self {
-            channel,
-            poll_sender,
-            // write_recver: None,
-            write_state: State::Idle,
-            // flush_recver: None,
-            // flush_state: State::Idle,
-            stdout: BytesMut::default(),
-            stderr: BytesMut::default(),
+            channel: Box::new(channel),
+            read_future: None,
+            write_future: None,
+            stdout: BytesMut::with_capacity(4096),
+            stderr: BytesMut::with_capacity(4096),
             rw_stdout: true,
             closed: false,
             eof: false,
         }
+    }
+
+    pub async fn close(self) -> Result<()> {
+        self.channel.close().await
     }
 }
 
@@ -153,63 +139,32 @@ impl AsyncWrite for Stream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        loop {
-            match self.write_state {
-                State::Idle => match ready!(self.poll_sender.poll_reserve(cx)) {
-                    Ok(_) => {
-                        self.write_state = State::Started;
-                    }
-                    Err(_) => {
-                        return Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::ConnectionAborted,
-                            "Connection lost",
-                        )))
-                    }
-                },
-                State::Started => {
-                    let (sender, recver) = oneshot::channel();
-                    let request = Request::ChannelWriteStdout {
-                        id: self.channel.id,
-                        data: buf.to_vec(),
-                        sender,
-                    };
+        if self.write_future.is_none() {
+            let future = self.channel.write(buf);
+            let future: Pin<Box<dyn Future<Output = Result<usize>> + Send>> = Box::pin(future);
 
-                    match self.poll_sender.send_item(request) {
-                        Ok(_) => {
-                            self.write_state = State::Wait(recver);
-                            // self.write_recver = Some(recver);
-                        }
-                        Err(_) => {
-                            return Poll::Ready(Err(io::Error::new(
-                                io::ErrorKind::ConnectionAborted,
-                                "Connection lost",
-                            )));
-                        }
-                    }
-                }
-                State::Wait(ref mut recver) => {
-                    // let recver = self.write_recver.as_mut().unwrap();
-
-                    let res = ready!(Pin::new(recver).poll(cx));
-                    self.write_state = State::Idle;
-                    // self.write_recver = None;
-                    return match res {
-                        Ok(Ok(size)) => Poll::Ready(Ok(size)),
-                        _ => Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::ConnectionAborted,
-                            "Connection lost",
-                        ))),
-                    };
-                }
-            }
+            self.write_future = unsafe { transmute(Some(future)) };
         }
+        let res = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
+        self.write_future = None;
+
+        Poll::Ready(match res {
+            Ok(size) => Ok(size),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "Connection lost",
+            )),
+        })
     }
 
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<std::prelude::v1::Result<(), io::Error>> {
         Poll::Ready(Ok(()))
     }
 }
@@ -220,150 +175,300 @@ impl AsyncRead for Stream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let mut stdout: Vec<u8> = vec![];
-        let mut stderr: Vec<u8> = vec![];
-        let mut closed = self.closed;
-        let mut eof = self.eof;
+        if self.read_future.is_none() {
+            let f = self.read_maximum(buf.remaining());
+            let f: Option<BoxFuture<'_, Result<Vec<u8>>>> = Some(Box::pin(f));
 
-        let mut ret = Poll::Ready(Ok(()));
-
-        if self.rw_stdout {
-            if self.stdout.is_empty() {
-                if self.closed {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::ConnectionAborted,
-                        "Disconnected",
-                    )));
-                }
-                if self.eof {
-                    return Poll::Ready(Ok(()));
-                }
-                loop {
-                    let data = ready!(self.channel.recver.poll_recv(cx));
-                    let data = match data {
-                        Some(data) => data,
-                        None => {
-                            ret = Poll::Ready(Err(io::Error::new(
-                                io::ErrorKind::ConnectionAborted,
-                                "Disconnected",
-                            )));
-                            break;
-                        }
-                    };
-                    match data {
-                        Message::Close => {
-                            closed = true;
-                            ret = Poll::Ready(Err(io::Error::new(
-                                io::ErrorKind::ConnectionAborted,
-                                "Disconnected",
-                            )));
-                            break;
-                        }
-                        Message::Eof => {
-                            eof = true;
-                            ret = Poll::Ready(Ok(()));
-                            break;
-                        }
-                        Message::Stdout(data) => {
-                            let remain = buf.remaining();
-                            if remain > data.len() {
-                                buf.put_slice(&data);
-                            } else {
-                                buf.put_slice(&data[..remain]);
-                                stdout.extend(&data[remain..])
-                            }
-                            break;
-                        }
-                        Message::Stderr(data) => stderr.extend(data),
-                        Message::Exit(_) => continue,
-                    };
-                }
-            } else {
-                let min = min(buf.remaining(), self.stdout.len());
-
-                buf.put_slice(&self.stdout.split_to(min));
-            }
-        } else if self.stderr.is_empty() {
-            if self.closed {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "Disconnected",
-                )));
-            }
-            if self.eof {
-                return Poll::Ready(Ok(()));
-            }
-            loop {
-                let data = ready!(self.channel.recver.poll_recv(cx));
-                let data = match data {
-                    Some(data) => data,
-                    None => {
-                        ret = Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::ConnectionAborted,
-                            "Disconnected",
-                        )));
-                        break;
-                    }
-                };
-                match data {
-                    Message::Close => {
-                        closed = true;
-                        ret = Poll::Ready(Err(io::Error::new(
-                            io::ErrorKind::ConnectionAborted,
-                            "Disconnected",
-                        )));
-                        break;
-                    }
-                    Message::Eof => {
-                        eof = true;
-                        ret = Poll::Ready(Ok(()));
-                        break;
-                    }
-                    Message::Stderr(data) => {
-                        let remain = buf.remaining();
-                        if remain > data.len() {
-                            buf.put_slice(&data);
-                        } else {
-                            buf.put_slice(&data[..remain]);
-                            stderr.extend(&data[remain..])
-                        }
-                        break;
-                    }
-                    Message::Stdout(data) => stdout.extend(data),
-                    Message::Exit(_) => continue,
-                };
-            }
-        } else {
-            let min = min(buf.remaining(), self.stderr.len());
-
-            buf.put_slice(&self.stderr.split_to(min));
+            self.read_future = unsafe { transmute(f) };
         }
 
-        self.stdout.extend(stdout);
-        self.stderr.extend(stderr);
-        self.closed = closed;
-        self.eof = eof;
-        ret
+        let res = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
+        self.read_future = None;
+        Poll::Ready(match res {
+            Ok(data) => {
+                buf.put_slice(&data);
+                Ok(())
+            }
+            Err(_) => {
+                Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "Connection lost",
+                ))
+            }
+        })
     }
 }
 
-// impl<T, B> From<Address<B>> for Address<T>
-// {
-//     fn from(value: Address<B>) -> Self {
-//         todo!()
+impl Stream {
+    async fn read_maximum(&mut self, max: usize) -> Result<Vec<u8>> {
+        loop {
+            if self.rw_stdout {
+                if self.stdout.is_empty() {
+                    if self.closed {
+                        return Err(Error::ChannelClosed);
+                    }
+                    if self.eof {
+                        return Ok(vec![]);
+                    }
+                    let msg = self.channel.recv().await?;
+                    // println!("msg from channel: {:?}", msg);
+                    match msg {
+                        Message::Close => {
+                            self.closed = true;
+                            return Err(Error::ChannelClosed);
+                        }
+                        Message::Eof => {
+                            self.eof = true;
+                            return Ok(vec![]);
+                        }
+                        Message::Stdout(mut data) => {
+                            if data.len() <= max {
+                                return Ok(data);
+                            } else {
+                                self.stdout.extend(&data[max..]);
+                                data.truncate(max);
+                                return Ok(data);
+                            }
+                        }
+                        Message::Stderr(data) => {
+                            self.stderr.extend(data);
+                        }
+                        Message::Exit(_) => continue,
+                    }
+                } else {
+                    let min = min(max, self.stdout.len());
+                    return Ok(self.stdout.split_to(min).to_vec());
+                }
+            } else if self.stderr.is_empty() {
+                if self.closed {
+                    return Err(Error::ChannelClosed);
+                }
+                if self.eof {
+                    return Ok(vec![]);
+                }
+                let msg = self.channel.recv().await?;
+                match msg {
+                    Message::Close => {
+                        self.closed = true;
+                        return Err(Error::ChannelClosed);
+                    }
+                    Message::Eof => {
+                        self.eof = true;
+                        return Ok(vec![]);
+                    }
+                    Message::Stdout(data) => {
+                        self.stdout.extend(data);
+                    }
+                    Message::Stderr(mut data) => {
+                        if data.len() <= max {
+                            return Ok(data);
+                        } else {
+                            self.stderr.extend(&data[max..]);
+                            data.truncate(max);
+                            return Ok(data);
+                        }
+                    }
+                    Message::Exit(_) => continue,
+                }
+            } else {
+                let min = min(max, self.stderr.len());
+                return Ok(self.stderr.split_to(min).to_vec());
+            }
+        }
+    }
+}
+
+// pub struct Stream {
+//     channel: Box<Channel>, // boxed due to self referencing
+
+//     // be careful, self referencing here
+//     read_future: Option<Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send>>>,
+
+//     // be careful, self referencing here
+//     write_future: Option<Pin<Box<dyn Future<Output = Result<usize>> + Send>>>,
+
+//     stdout: BytesMut,
+
+//     stderr: BytesMut,
+
+//     pub rw_stdout: bool,
+
+//     closed: bool,
+
+//     eof: bool,
+// }
+
+// impl Stream {
+//     pub fn new(channel: Channel) -> Self {
+//         Self {
+//             channel: Box::new(channel),
+//             read_future: None,
+//             write_future: None,
+//             stdout: BytesMut::with_capacity(4096),
+//             stderr: BytesMut::with_capacity(4096),
+//             rw_stdout: true,
+//             closed: false,
+//             eof: false,
+//         }
+//     }
+
+//     pub async fn close(self) -> Result<()> {
+//         self.channel.close().await
 //     }
 // }
 
-// impl<T: Into<String>> From<T> for Address {
-//     fn from(value: T) -> Self {
-//         Self(value.into())
+// impl AsyncWrite for Stream {
+//     fn poll_write(
+//         mut self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//         buf: &[u8],
+//     ) -> Poll<io::Result<usize>> {
+//         if self.write_future.is_none() {
+//             let future = self.channel.write(buf);
+//             let future: Pin<Box<dyn Future<Output = Result<usize>> + Send>> = Box::pin(future);
+
+//             self.write_future = unsafe { transmute(Some(future)) };
+//         }
+//         let res = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
+//         self.write_future = None;
+
+//         Poll::Ready(match res {
+//             Ok(size) => Ok(size),
+//             Err(_) => Err(io::Error::new(
+//                 io::ErrorKind::ConnectionAborted,
+//                 "Connection lost",
+//             )),
+//         })
+//     }
+
+//     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+//         Poll::Ready(Ok(()))
+//     }
+
+//     fn poll_shutdown(
+//         self: Pin<&mut Self>,
+//         _: &mut Context<'_>,
+//     ) -> Poll<std::prelude::v1::Result<(), io::Error>> {
+//         Poll::Ready(Ok(()))
+//     }
+// }
+
+// impl AsyncRead for Stream {
+//     fn poll_read(
+//         mut self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//         buf: &mut ReadBuf<'_>,
+//     ) -> Poll<io::Result<()>> {
+//         if self.read_future.is_none() {
+//             let f = self.read_maximum(buf.remaining());
+//             let f: Option<Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send>>> =
+//                 Some(Box::pin(f));
+
+//             self.read_future = unsafe { transmute(f) };
+//         }
+
+//         let res = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
+//         println!("poll res: {}", res.is_err());
+//         self.read_future = None;
+//         Poll::Ready(match res {
+//             Ok(data) => {
+//                 buf.put_slice(&data);
+//                 Ok(())
+//             }
+//             Err(err) => {
+//                 println!("error: {:?}", err);
+//                 Err(io::Error::new(
+//                     io::ErrorKind::ConnectionAborted,
+//                     "Connection lost",
+//                 ))
+//             }
+//         })
+//     }
+// }
+
+// impl Stream {
+//     async fn read_maximum(&mut self, max: usize) -> Result<Vec<u8>> {
+//         loop {
+//             if self.rw_stdout {
+//                 if self.stdout.is_empty() {
+//                     if self.closed {
+//                         return Err(Error::ChannelClosed);
+//                     }
+//                     if self.eof {
+//                         return Ok(vec![]);
+//                     }
+//                     let msg = self.channel.recv().await?;
+//                     println!("msg from channel: {:?}", msg);
+//                     match msg {
+//                         Message::Close => {
+//                             self.closed = true;
+//                             return Err(Error::ChannelClosed);
+//                         }
+//                         Message::Eof => {
+//                             self.eof = true;
+//                             return Ok(vec![]);
+//                         }
+//                         Message::Stdout(mut data) => {
+//                             if data.len() <= max {
+//                                 return Ok(data);
+//                             } else {
+//                                 self.stdout.extend(&data[max..]);
+//                                 data.truncate(max);
+//                                 return Ok(data);
+//                             }
+//                         }
+//                         Message::Stderr(data) => {
+//                             self.stderr.extend(data);
+//                         }
+//                         Message::Exit(_) => continue,
+//                     }
+//                 } else {
+//                     let min = min(max, self.stdout.len());
+//                     return Ok(self.stdout.split_to(min).to_vec());
+//                 }
+//             } else {
+//                 if self.stderr.is_empty() {
+//                     if self.closed {
+//                         return Err(Error::ChannelClosed);
+//                     }
+//                     if self.eof {
+//                         return Ok(vec![]);
+//                     }
+//                     let msg = self.channel.recv().await?;
+//                     match msg {
+//                         Message::Close => {
+//                             self.closed = true;
+//                             return Err(Error::ChannelClosed);
+//                         }
+//                         Message::Eof => {
+//                             self.eof = true;
+//                             return Ok(vec![]);
+//                         }
+//                         Message::Stdout(data) => {
+//                             self.stdout.extend(data);
+//                         }
+//                         Message::Stderr(mut data) => {
+//                             if data.len() <= max {
+//                                 return Ok(data);
+//                             } else {
+//                                 self.stderr.extend(&data[max..]);
+//                                 data.truncate(max);
+//                                 return Ok(data);
+//                             }
+//                         }
+//                         Message::Exit(_) => continue,
+//                     }
+//                 } else {
+//                     let min = min(max, self.stderr.len());
+//                     return Ok(self.stderr.split_to(min).to_vec());
+//                 }
+//             }
+//         }
 //     }
 // }
 
 pub struct Channel {
     pub(crate) id: u32,
-    // pub(crate) stdout: ManuallyDrop<IOReceiver>,
-    // stderr: ManuallyDrop<IOReceiver>,
     recver: ManuallyDrop<mpsc::Receiver<Message>>,
     session: ManuallyDrop<mpsc::Sender<Request>>,
 }
@@ -377,9 +482,6 @@ impl Drop for Channel {
         self.manually_drop()
     }
 }
-
-// use super::scp::Sender as ScpSender;
-// use super::sftp::{Permissions, Timestamp};
 
 impl Channel {
     pub(crate) fn new(
@@ -400,87 +502,6 @@ impl Channel {
             ManuallyDrop::drop(&mut self.session);
         }
     }
-
-    // pub async fn sftp(self) -> Result<SFtp> {
-    //     let (sender, recver) = oneshot::channel();
-
-    //     let session = (*self.session).clone();
-    //     let request = Request::SFtpFromChannel {
-    //         channel: self,
-    //         sender,
-    //     };
-
-    //     session
-    //         .send(request)
-    //         .await
-    //         .map_err(|_| Error::Disconnected)?;
-
-    //     recver.await?
-    // }
-
-    // pub async fn flush(&self) -> Result<()> {
-    //     let (sender, recver) = oneshot::channel();
-    //     let request = Request::ChannelFlushStdout {
-    //         id: self.id,
-    //         sender,
-    //     };
-
-    //     self.send_request(request).await?;
-
-    //     recver.await?
-    // }
-
-    // pub async fn is_server_closed(&self) -> bool {
-    //     self.stdout.is_closed().await
-    // }
-
-    // pub async fn is_server_eof(&self) -> bool {
-    //     self.stdout.is_eof().await
-    // }
-
-    // pub async fn scp_sender(
-    //     mut self,
-    //     path: &str,
-    //     size: usize,
-    //     permissions: Permissions,
-    //     time: Option<Timestamp>,
-    // ) -> Result<ScpSender> {
-    //     let cmd = match time {
-    //         Some(_) => format!("scp -pt {}", path),
-    //         None => format!("scp -t {}", path),
-    //     };
-
-    //     self.exec(cmd).await?;
-
-    //     let response = self.read().await?;
-
-    //     if response.len() != 1 || response[0] != 0 {
-    //         return Err(Error::invalid_format("invalid scp response"));
-    //     }
-
-    //     if let Some(time) = time {
-    //         let send = format!("T{} 0 {} 0\n", time.mtime, time.atime);
-    //         self.write(send).await?;
-    //         let response = self.read().await?;
-
-    //         if response.len() != 1 || response[0] != 0 {
-    //             return Err(Error::invalid_format("invalid scp response"));
-    //         }
-    //     }
-
-    //     let filename = path.split('/').last().unwrap_or(path);
-    //     let send = format!("C0{:0o} {} {}\n", permissions.bits(), size, filename);
-
-    //     self.write(send).await?;
-
-    //     let response = self.read().await?;
-
-    //     if response.len() != 1 || response[0] != 0 {
-    //         return Err(Error::invalid_format("invalid scp response"));
-    //     }
-
-    //     Ok(ScpSender::new(self))
-    // }
 
     async fn close_without_drop(&self) -> Result<()> {
         let (sender, recver) = oneshot::channel();
@@ -541,60 +562,9 @@ impl Channel {
         recver.await?
     }
 
-    // pub async fn exec_and_wait(&self, cmd: impl Into<String>) -> Result<ExitStatus> {
-    //     let (sender, recver) = oneshot::channel();
-
-    //     let request = Request::ChannelExecWait {
-    //         id: self.id,
-    //         cmd: cmd.into(),
-    //         sender,
-    //     };
-
-    //     self.send_request(request).await?;
-
-    //     recver.await.map_err(|_| Error::Disconnected)?
-    // }
-
-    // pub async fn exit_status(&self) -> Result<ExitStatus> {
-    //     let (sender, recver) = oneshot::channel();
-    //     let request = Request::ChannelGetExitStatus {
-    //         id: self.id,
-    //         sender,
-    //     };
-
-    //     self.send_request(request).await?;
-    //     recver.await.map_err(|_| Error::Disconnected)?
-    // }
-
     pub async fn recv(&mut self) -> Result<Message> {
         self.recver.recv().await.ok_or(Error::Disconnected)
     }
-
-    // pub fn try_read(&mut self) -> Result<Option<Vec<u8>>> {
-    //     self.stdout.try_read()
-    // }
-
-    // pub(crate) async fn read(&mut self) -> Result<Vec<u8>> {
-    //     loop {
-    //         match self.recv().await? {
-    //             Message::Close => return Err(Error::ChannelClosed),
-    //             Message::Eof => return Err(Error::ChannelEOF),
-    //             Message::Stdout(data) => return Ok(data),
-    //             Message::Stderr(_) => {}
-    //             Message::Exit(_) => {
-    //                 return Err(Error::ProtocolError("Unexpected status".to_string()))
-    //             }
-    //         }
-    //     }
-    // }
-
-    // pub fn try_read_stderr(&mut self) -> Result<Option<Vec<u8>>> {
-    //     self.stderr.try_read()
-    // }
-
-    // pub async fn read_stderr(&mut self) -> Result<Vec<u8>> {
-    //     self.stderr.read().await
-    // }
 
     pub async fn write(&self, data: impl Into<Vec<u8>>) -> Result<usize> {
         let data: Vec<u8> = data.into();

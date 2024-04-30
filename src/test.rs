@@ -109,17 +109,16 @@ async fn open_sftp() {
 
     let content = "123456789\n";
     let mut sender = scp::Sender::from_channel(
-            channel,
-            "./Documents/test1.scp.txt",
-            content.len() as u64,
-            Permissions::p0755(),
-            None,
-        )
-        .await
-        .unwrap();
+        channel,
+        "./Documents/test1.scp.txt",
+        content.len() as u64,
+        Permissions::p0755(),
+        None,
+    )
+    .await
+    .unwrap();
 
     sender.send(content).await.unwrap();
-
 
     sender.finish().await.unwrap();
 }
