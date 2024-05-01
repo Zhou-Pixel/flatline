@@ -132,7 +132,7 @@ async fn echo_hello<B: Behavior + Send + 'static>(config: Config<B>, times: usiz
     assert!(matches!(status, Userauth::Success));
 
     for _ in 0..times {
-        let mut channel = session.channel_open_default().await.unwrap();
+        let channel = session.channel_open_default().await.unwrap();
         channel.exec("echo \"hello\"").await.unwrap();
 
         loop {

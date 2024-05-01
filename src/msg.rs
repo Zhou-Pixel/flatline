@@ -5,7 +5,7 @@ use super::sftp::SFtp;
 use super::ssh::common::code::*;
 use crate::forward::Listener;
 use crate::ssh::buffer::Buffer;
-use super::{KOReceiver, KOSender};
+use super::KOSender;
 
 #[derive(Debug)]
 pub(crate) enum Request {

@@ -429,7 +429,7 @@ where
     B: Behavior + Send,
 {
     fn run(mut self) {
-        let handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
                 tokio::select! {
                     request = self.recver.recv() => {
@@ -448,9 +448,6 @@ where
                 }
             }
             Result::Ok(())
-        });
-        tokio::spawn(async move {
-            println!("Session exit: {:?}", tokio::join!(handle));
         });
     }
 
@@ -794,12 +791,8 @@ where
                 }
             }
             Request::ChannelWriteStdout { id, data, sender } => {
-                println!("{}:{}", file!(), line!());
                 let res = self.channel_write_stdout(id, &data).await;
-                println!("{}:{}", file!(), line!());
-                let res = sender.send(res).await.unwrap();
-                println!("{}:{}", file!(), line!());
-                println!("send res: {:?}", res);
+                let _ = sender.send(res).await;
             }
             Request::SFtpOpen {
                 initial,

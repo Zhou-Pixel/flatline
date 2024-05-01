@@ -163,7 +163,7 @@ impl AsyncWrite for Stream {
     fn poll_shutdown(
         self: Pin<&mut Self>,
         _: &mut Context<'_>,
-    ) -> Poll<std::prelude::v1::Result<(), io::Error>> {
+    ) -> Poll<io::Result<()>> {
         Poll::Ready(Ok(()))
     }
 }
@@ -577,14 +577,10 @@ impl Channel {
             data,
             sender,
         };
-        println!("{}:{}", file!(), line!());
         self.send_request(request).await?;
-        println!("{}:{}", file!(), line!());
 
         let r = recver.recv().await?;
 
-        println!("{}:{}", file!(), line!());
-        println!("res: {:?}", r);
         r
     }
 

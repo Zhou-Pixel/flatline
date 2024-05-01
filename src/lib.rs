@@ -14,7 +14,7 @@ mod ssh;
 pub(crate) type KMSender<T> = kanal::AsyncSender<T>;
 pub(crate) type KMReceiver<T> = kanal::AsyncReceiver<T>;
 pub(crate) type KOSender<T> = kanal::OneshotAsyncSender<T>;
-pub(crate) type KOReceiver<T> = kanal::OneshotAsyncReceiver<T>;
+// pub(crate) type KOReceiver<T> = kanal::OneshotAsyncReceiver<T>;
 
 #[cfg(test)]
 mod test;
