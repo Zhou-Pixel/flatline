@@ -13,11 +13,10 @@ use std::task::Poll;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
 use super::error::{Error, Result};
 use super::msg::Request;
+use super::{KMReceiver, KMSender};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -150,9 +149,9 @@ impl AsyncWrite for Stream {
 
         Poll::Ready(match res {
             Ok(size) => Ok(size),
-            Err(_) => Err(io::Error::new(
+            Err(err) => Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
-                "Connection lost",
+                err.to_string(),
             )),
         })
     }
@@ -189,9 +188,9 @@ impl AsyncRead for Stream {
                 buf.put_slice(&data);
                 Ok(())
             }
-            Err(_) => Err(io::Error::new(
+            Err(err) => Err(io::Error::new(
                 io::ErrorKind::ConnectionAborted,
-                "Connection lost",
+                err.to_string(),
             )),
         })
     }
@@ -467,13 +466,19 @@ impl Stream {
 
 pub struct Channel {
     pub(crate) id: u32,
-    recver: ManuallyDrop<mpsc::Receiver<Message>>,
-    session: ManuallyDrop<mpsc::Sender<Request>>,
+    recver: ManuallyDrop<KMReceiver<Message>>,
+    session: ManuallyDrop<KMSender<Request>>,
+}
+
+impl std::fmt::Debug for Channel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Channel {{ id: {} }}", self.id)
+    }
 }
 
 impl Drop for Channel {
     fn drop(&mut self) {
-        let _ = self.session.try_send(Request::ChannelDrop {
+        let _ = self.session.as_sync().send(Request::ChannelDrop {
             id: self.id,
             sender: None,
         });
@@ -484,8 +489,8 @@ impl Drop for Channel {
 impl Channel {
     pub(crate) fn new(
         id: u32,
-        channel: mpsc::Receiver<Message>,
-        session: mpsc::Sender<Request>,
+        channel: KMReceiver<Message>,
+        session: KMSender<Request>,
     ) -> Self {
         Self {
             id,
@@ -502,13 +507,13 @@ impl Channel {
     }
 
     async fn close_without_drop(&self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         self.send_request(Request::ChannelDrop {
             id: self.id,
             sender: Some(sender),
         })
         .await?;
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn close(mut self) -> Result<()> {
@@ -519,7 +524,7 @@ impl Channel {
     }
 
     pub async fn send_signal(&self, signal: impl Into<Signal>) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let request = Request::ChannelSendSignal {
             id: self.id,
             signal: signal.into(),
@@ -528,13 +533,13 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn set_env(&self, name: impl Into<String>, value: impl Into<Vec<u8>>) -> Result<()> {
         let name = name.into();
         let value = value.into();
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let request = Request::ChannelSetEnv {
             id: self.id,
             name,
@@ -544,11 +549,11 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn exec(&self, cmd: impl Into<String>) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let request = Request::ChannelExec {
             id: self.id,
             cmd: cmd.into(),
@@ -557,40 +562,45 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
-    pub async fn recv(&mut self) -> Result<Message> {
-        self.recver.recv().await.ok_or(Error::Disconnected)
+    pub async fn recv(&self) -> Result<Message> {
+        self.recver.recv().await.map_err(|_| Error::Disconnected)
     }
 
     pub async fn write(&self, data: impl Into<Vec<u8>>) -> Result<usize> {
         let data: Vec<u8> = data.into();
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let request = Request::ChannelWriteStdout {
             id: self.id,
             data,
             sender,
         };
-
+        println!("{}:{}", file!(), line!());
         self.send_request(request).await?;
+        println!("{}:{}", file!(), line!());
 
-        recver.await?
+        let r = recver.recv().await?;
+
+        println!("{}:{}", file!(), line!());
+        println!("res: {:?}", r);
+        r
     }
 
     pub async fn eof(&self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let request = Request::ChannelEof {
             id: self.id,
             sender,
         };
         self.send_request(request).await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn request_shell(&self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let request = Request::ChannelReuqestShell {
             id: self.id,
             sender,
@@ -598,7 +608,7 @@ impl Channel {
 
         self.send_request(request).await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     async fn send_request(&self, msg: Request) -> Result<()> {
@@ -608,7 +618,7 @@ impl Channel {
             .map_err(|_| Error::Disconnected)
     }
 
-    pub(crate) fn session(&self) -> mpsc::Sender<Request> {
+    pub(crate) fn session(&self) -> KMSender<Request> {
         (*self.session).clone()
     }
 }
@@ -641,7 +651,7 @@ pub(crate) struct ChannelInner {
     pub(crate) server: Endpoint,
     // pub(crate) stdout: IOSender,
     // pub(crate) stderr: IOSender,
-    pub(crate) sender: mpsc::Sender<Message>,
+    pub(crate) sender: KMSender<Message>,
     // #[new(default)]
     // pub(crate) stdout_buf: Vec<u8>,
     // pub(crate) exit_status: Option<ExitStatus>,

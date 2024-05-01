@@ -3,7 +3,7 @@ use std::{io, str::Utf8Error};
 use super::channel::ChannelOpenFailureReson;
 use openssl::error::ErrorStack;
 use thiserror::Error;
-use tokio::sync::oneshot::error::RecvError;
+use kanal::OneshotReceiveError;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -128,8 +128,8 @@ impl Error {
     }
 }
 
-impl From<RecvError> for Error {
-    fn from(_: RecvError) -> Self {
+impl From<OneshotReceiveError> for Error {
+    fn from(_: OneshotReceiveError) -> Self {
         Self::Disconnected
     }
 }

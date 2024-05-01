@@ -3,7 +3,6 @@ use std::cmp::min;
 use std::collections::HashMap;
 
 use derive_new::new;
-use tokio::sync::oneshot;
 
 use crate::channel::{Channel, Stream};
 use crate::error::Result;
@@ -462,7 +461,7 @@ impl SFtp {
     }
 
     pub async fn from_channel(channel: Channel) -> Result<Self> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
 
         let session = channel.session();
         let request = Request::SFtpFromChannel { channel, sender };
@@ -472,7 +471,7 @@ impl SFtp {
             .await
             .map_err(|_| Error::Disconnected)?;
 
-        recver.await?
+        recver.recv().await?
     }
     // pub async fn flush(&self) -> Result<()> {
     //     self.channel.inner().inner().flush().await

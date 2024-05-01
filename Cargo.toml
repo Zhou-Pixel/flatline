@@ -19,8 +19,9 @@ flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 indexmap = "2"
 openssl = { version = "0.10.63" }
 thiserror = "1.0"
-tokio = { version = "1", features = ["io-util", "rt", "macros", "sync"] }
-
+tokio = { version = "1", features = ["io-util", "rt", "macros"] }
+kanal ={ git ="https://github.com/Zhou-Pixel/kanal.git", rev = "2b333b0b5fb8e3ba3a66fce33b6d0fad6b078476" }
+# kanal ={ path = "../kanal"}
 
 [features]
 openssl-vendored = [ "openssl/vendored" ]

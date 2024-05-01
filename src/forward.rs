@@ -5,16 +5,15 @@ use std::{
     task::{Context, Poll},
 };
 
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::{mpsc, oneshot},
-};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{channel::Channel, msg::Request};
 use crate::{
     channel::Stream as ChannelStream,
     error::{Error, Result},
 };
+
+use super::{KMReceiver, KMSender};
 
 pub struct Stream {
     channel: ChannelStream,
@@ -84,15 +83,15 @@ impl Stream {
 }
 
 pub struct Listener {
-    session: ManuallyDrop<mpsc::Sender<Request>>,
-    recver: ManuallyDrop<mpsc::Receiver<Stream>>,
+    session: ManuallyDrop<KMSender<Request>>,
+    recver: ManuallyDrop<KMReceiver<Stream>>,
     address: ManuallyDrop<String>,
     port: u32,
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        let _ = self.session.try_send(Request::CancelTcpipForward {
+        let _ = self.session.as_sync().send(Request::CancelTcpipForward {
             address: (*self.address).clone(),
             port: self.port,
             sender: None,
@@ -104,8 +103,8 @@ impl Drop for Listener {
 
 impl Listener {
     pub(crate) fn new(
-        session: mpsc::Sender<Request>,
-        recver: mpsc::Receiver<Stream>,
+        session: KMSender<Request>,
+        recver: KMReceiver<Stream>,
         address: String,
         port: u32,
     ) -> Self {
@@ -117,8 +116,8 @@ impl Listener {
         }
     }
 
-    pub async fn accpet(&mut self) -> Result<Stream> {
-        self.recver.recv().await.ok_or(Error::Disconnected)
+    pub async fn accpet(&self) -> Result<Stream> {
+        self.recver.recv().await.map_err(|_| Error::Disconnected)
     }
 
     fn manually_drop(&mut self) {
@@ -130,7 +129,7 @@ impl Listener {
     }
 
     pub async fn cancel(mut self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let request = Request::CancelTcpipForward {
             address: (*self.address).clone(),
             port: self.port,
@@ -146,7 +145,7 @@ impl Listener {
 
         mem::forget(self);
 
-        recver.await.map_err(|_| Error::Disconnected)?
+        recver.recv().await?
     }
 
     pub fn listen_port(&self) -> u32 {

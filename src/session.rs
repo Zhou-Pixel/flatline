@@ -2,6 +2,8 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
+use super::{KMReceiver, KMSender};
+
 use super::channel::ChannelOpenFailureReson;
 use super::handshake;
 use super::ssh::stream::CipherStream;
@@ -33,7 +35,6 @@ use crate::ssh::stream::PlainStream;
 use derive_new::new;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use tokio::sync::{mpsc, oneshot};
 
 macro_rules! channel_loop {
     ($sel:ident,$id:expr,$($e:pat $(if $c:expr )? => $h:expr,)*) => {
@@ -109,7 +110,7 @@ impl DisconnectReson {
 // }
 
 pub struct Session {
-    sender: ManuallyDrop<mpsc::Sender<Request>>,
+    sender: ManuallyDrop<KMSender<Request>>,
 }
 
 impl Drop for Session {
@@ -118,13 +119,13 @@ impl Drop for Session {
             reson: DisconnectReson::BY_APPLICATION,
             desc: "exit".to_string(),
         };
-        let _ = self.sender.try_send(request);
+        let _ = self.sender.as_sync().send(request);
         self.manually_drop()
     }
 }
 
 impl Session {
-    fn new(sender: mpsc::Sender<Request>) -> Self {
+    fn new(sender: KMSender<Request>) -> Self {
         Self {
             sender: ManuallyDrop::new(sender),
         }
@@ -157,7 +158,7 @@ impl Session {
         remote: (impl Into<String>, u32),
         local: (impl Into<String>, u32),
     ) -> Result<Stream> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let address: String = remote.0.into();
         self.send_request(Request::DirectTcpip {
             initial,
@@ -167,7 +168,7 @@ impl Session {
             sender,
         })
         .await?;
-        let channel = recver.await??;
+        let channel = recver.recv().await??;
 
         Ok(Stream::new(channel, address, remote.1))
     }
@@ -188,7 +189,7 @@ impl Session {
         initial: u32,
         maximum: u32,
     ) -> Result<Listener> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         self.send_request(Request::TcpipForward {
             address: address.into(),
             port,
@@ -198,7 +199,7 @@ impl Session {
         })
         .await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn disconnect_default(self) -> Result<()> {
@@ -229,7 +230,7 @@ impl Session {
     }
 
     pub async fn sftp_open(&self, initial: u32, maximum: u32) -> Result<SFtp> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         self.send_request(Request::SFtpOpen {
             initial,
             maximum,
@@ -237,7 +238,7 @@ impl Session {
         })
         .await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     #[inline]
@@ -246,7 +247,7 @@ impl Session {
     }
 
     pub async fn channel_open(&self, initial: u32, maximum: u32) -> Result<Channel> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let msg = Request::ChannelOpenSession {
             initial,
             maximum,
@@ -255,19 +256,19 @@ impl Session {
 
         self.send_request(msg).await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn userauth_none(&self, username: impl Into<String>) -> Result<Userauth> {
         let username = username.into();
 
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
 
         let requset = Request::UserauthNone { username, sender };
 
         self.send_request(requset).await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn userauth_publickey(
@@ -277,7 +278,7 @@ impl Session {
         publickey: impl Into<Vec<u8>>,
         privatekey: impl Into<Vec<u8>>,
     ) -> Result<Userauth> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
         let request = Request::UserauthPublickey {
             username: username.into(),
             method: method.into(),
@@ -287,7 +288,7 @@ impl Session {
         };
         self.send_request(request).await?;
 
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn userauth_password(
@@ -298,7 +299,7 @@ impl Session {
         let username = username.into();
         let password = password.into();
 
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = kanal::oneshot_async();
 
         let request = Request::UserAuthPassWord {
             username,
@@ -310,7 +311,7 @@ impl Session {
             .send(request)
             .await
             .map_err(|_| Error::Disconnected)?;
-        recver.await?
+        recver.recv().await?
     }
 
     pub async fn handshake<T, B>(mut config: handshake::Config<B>, socket: T) -> Result<Self>
@@ -370,9 +371,9 @@ impl Session {
 
         algo.initialize(&mut result)?;
 
-        let (sender, recver) = mpsc::channel(4096);
+        let (sender, recver) = kanal::unbounded_async();
 
-        let weak_sender = sender.downgrade();
+        // let weak_sender = sender.downgrade();
         let session = Session::new(sender);
 
         let stream = plain_stream.encrypt(
@@ -385,7 +386,7 @@ impl Session {
             Endpoint::new(config.banner),
             Endpoint::new(banner),
             recver,
-            weak_sender,
+            // weak_sender,
             config.behavior,
         );
         inner.request_userauth_service().await?;
@@ -396,7 +397,7 @@ impl Session {
 
 #[derive(new)]
 struct ListenerInner {
-    sender: mpsc::Sender<Stream>,
+    sender: KMSender<Stream>,
     initial: u32,
     maximum: u32,
 }
@@ -411,14 +412,14 @@ where
     stream: CipherStream<T>,
     _client: Endpoint,
     _server: Endpoint,
-    recver: mpsc::Receiver<Request>,
+    recver: KMReceiver<Request>,
 
     #[new(default)]
     channels: HashMap<u32, ChannelInner>,
 
     #[new(default)]
     listeners: HashMap<(String, u32), ListenerInner>,
-    weak_sender: mpsc::WeakSender<Request>,
+    // weak_sender: mpsc::WeakSender<Request>,
     behaivor: Option<B>,
 }
 
@@ -428,11 +429,11 @@ where
     B: Behavior + Send,
 {
     fn run(mut self) {
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     request = self.recver.recv() => {
-                        let Some(request) = request else {
+                        let Ok(request) = request else {
                             self.session_disconnect(DisconnectReson::BY_APPLICATION, "exit").await?;
                             break;
                         };
@@ -447,6 +448,9 @@ where
                 }
             }
             Result::Ok(())
+        });
+        tokio::spawn(async move {
+            println!("Session exit: {:?}", tokio::join!(handle));
         });
     }
 
@@ -616,10 +620,13 @@ where
         Ok(())
     }
 
-    fn upgrade_sender(&self) -> Result<mpsc::Sender<Request>> {
-        self.weak_sender
-            .upgrade()
+    fn upgrade_sender(&self) -> Result<KMSender<Request>> {
+        self.recver
+            .sender_async()
             .ok_or(Error::ub("Session has been dropped"))
+        // self.weak_sender
+        //     .upgrade()
+        //     .ok_or(Error::ub("Session has been dropped"))
     }
 
     async fn accpet_tcpip_forward(
@@ -649,7 +656,7 @@ where
 
                 self.stream.send_payload(buffer.as_ref()).await?;
 
-                let (tx, rx) = mpsc::channel(4096);
+                let (tx, rx) = kanal::unbounded_async();
 
                 let channel = Channel::new(client_id, rx, session);
                 use super::channel::Endpoint as ChannelEp;
@@ -765,7 +772,7 @@ where
                 sender,
             } => {
                 let res = self.userauth_password(&username, &password).await;
-                let _ = sender.send(res);
+                let _ = sender.send(res).await;
             }
             Request::ChannelOpenSession {
                 initial,
@@ -774,22 +781,25 @@ where
             } => {
                 let res = self.channel_open_session(initial, maximum).await;
 
-                let _ = sender.send(res);
+                let _ = sender.send(res).await;
             }
             Request::ChannelExec { id, cmd, sender } => {
                 let res = self.channel_exec(id, &cmd).await;
-                let _ = sender.send(res);
+                let _ = sender.send(res).await;
             }
             Request::ChannelDrop { id, sender } => {
                 let res = self.channel_drop(id).await;
                 if let Some(sender) = sender {
-                    let _ = sender.send(res);
+                    let _ = sender.send(res).await;
                 }
             }
             Request::ChannelWriteStdout { id, data, sender } => {
+                println!("{}:{}", file!(), line!());
                 let res = self.channel_write_stdout(id, &data).await;
-
-                let _ = sender.send(res);
+                println!("{}:{}", file!(), line!());
+                let res = sender.send(res).await.unwrap();
+                println!("{}:{}", file!(), line!());
+                println!("send res: {:?}", res);
             }
             Request::SFtpOpen {
                 initial,
@@ -798,11 +808,11 @@ where
             } => {
                 let res = self.sftp_open(initial, maximum).await;
 
-                let _ = sender.send(res);
+                let _ = sender.send(res).await;
             }
             Request::UserauthNone { username, sender } => {
                 let res = self.userauth_none(&username).await;
-                let _ = sender.send(res);
+                let _ = sender.send(res).await;
             }
             Request::UserauthPublickey {
                 username,
@@ -814,7 +824,7 @@ where
                 let res = self
                     .userauth_publickey(&username, &method, &publickey, &privatekey)
                     .await;
-                let _ = sender.send(res);
+                let _ = sender.send(res).await;
             }
             // Request::ChannelExecWait { id, cmd, sender } => {
             //     let res = self.channel_exec_wait(id, &cmd).await;
@@ -829,7 +839,7 @@ where
             Request::ChannelEof { id, sender } => {
                 let res = self.channel_eof(id).await;
 
-                let _ = sender.send(res);
+                let _ = sender.send(res).await;
             }
             Request::ChannelSetEnv {
                 id,
@@ -838,7 +848,7 @@ where
                 sender,
             } => {
                 let res = self.channel_set_env(id, &name, &value).await;
-                let _ = sender.send(res);
+                let _ = sender.send(res).await;
             }
             Request::ChannelSendSignal { id, signal, sender } => {
                 let res = self.channel_send_signal(id, &signal.0).await;
@@ -854,7 +864,7 @@ where
             //     // let _ = sender.send(res);
             // }
             Request::ChannelReuqestShell { id, sender } => {
-                let _ = sender.send(self.channel_request_shell(id).await);
+                let _ = sender.send(self.channel_request_shell(id).await).await;
             }
             Request::SFtpFromChannel { channel, sender } => {
                 let func = async {
@@ -866,7 +876,7 @@ where
                     self.sftp_from_channel(channel, inner).await
                 };
 
-                let _ = sender.send(func.await);
+                let _ = sender.send(func.await).await;
             }
             Request::TcpipForward {
                 address,
@@ -875,7 +885,7 @@ where
                 maximum,
                 sender,
             } => {
-                let _ = sender.send(self.tcpip_forward(&address, port, initial, maximum).await);
+                let _ = sender.send(self.tcpip_forward(&address, port, initial, maximum).await).await;
             }
             Request::CancelTcpipForward {
                 address,
@@ -885,7 +895,7 @@ where
                 let res = self.cancel_tcpip_forward(&address, port).await;
 
                 if let Some(sender) = sender {
-                    let _ = sender.send(res);
+                    let _ = sender.send(res).await;
                 }
             }
             Request::DirectTcpip {
@@ -895,7 +905,7 @@ where
                 local,
                 sender,
             } => {
-                let _ = sender.send(self.direct_tcpip(initial, maximum, remote, local).await);
+                let _ = sender.send(self.direct_tcpip(initial, maximum, remote, local).await).await;
             }
         }
         false
@@ -941,7 +951,7 @@ where
                 } if recipient == client_id => {
                     let client = ChannelEndpoint::new(client_id, initial, maximum);
                     let server = ChannelEndpoint::new(sender, server_initial, server_maximum);
-                    let (sender, recver) = mpsc::channel(4096);
+                    let (sender, recver) = kanal::unbounded_async();
 
                     let channel = Channel::new(client.id, recver, session);
 
@@ -1024,7 +1034,7 @@ where
                             .take_u32()
                             .ok_or(Error::invalid_format("Invalid port"))?;
                     }
-                    let (sender, recver) = mpsc::channel(4096);
+                    let (sender, recver) = kanal::unbounded_async();
 
                     self.listeners.insert(
                         (address.to_string(), port),
@@ -1561,7 +1571,7 @@ where
         // let stdout = io_channel();
         // let stderr = io_channel();
 
-        let (sender, recver) = mpsc::channel(4096);
+        let (sender, recver) = kanal::unbounded_async();
 
         let channel = Channel::new(client.id, recver, session);
 
