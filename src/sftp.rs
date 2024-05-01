@@ -3,7 +3,6 @@ use std::cmp::min;
 use std::collections::HashMap;
 
 use derive_new::new;
-use tokio::sync::oneshot;
 
 use crate::channel::{Channel, Stream};
 use crate::error::Result;
@@ -15,6 +14,7 @@ use crate::{
     ssh::{buffer::Buffer, common::code::*},
 };
 
+use super::o_channel;
 use bitflags::bitflags;
 
 bitflags! {
@@ -462,14 +462,13 @@ impl SFtp {
     }
 
     pub async fn from_channel(channel: Channel) -> Result<Self> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
 
         let session = channel.session();
         let request = Request::SFtpFromChannel { channel, sender };
 
         session
             .send(request)
-            .await
             .map_err(|_| Error::Disconnected)?;
 
         recver.await?

@@ -13,11 +13,10 @@ use std::task::Poll;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
 use super::error::{Error, Result};
 use super::msg::Request;
+use super::{MSender, MReceiver, o_channel};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -467,13 +466,13 @@ impl Stream {
 
 pub struct Channel {
     pub(crate) id: u32,
-    recver: ManuallyDrop<mpsc::Receiver<Message>>,
-    session: ManuallyDrop<mpsc::Sender<Request>>,
+    recver: ManuallyDrop<MReceiver<Message>>,
+    session: ManuallyDrop<MSender<Request>>,
 }
 
 impl Drop for Channel {
     fn drop(&mut self) {
-        let _ = self.session.try_send(Request::ChannelDrop {
+        let _ = self.session.send(Request::ChannelDrop {
             id: self.id,
             sender: None,
         });
@@ -484,8 +483,8 @@ impl Drop for Channel {
 impl Channel {
     pub(crate) fn new(
         id: u32,
-        channel: mpsc::Receiver<Message>,
-        session: mpsc::Sender<Request>,
+        channel: MReceiver<Message>,
+        session: MSender<Request>,
     ) -> Self {
         Self {
             id,
@@ -502,12 +501,11 @@ impl Channel {
     }
 
     async fn close_without_drop(&self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         self.send_request(Request::ChannelDrop {
             id: self.id,
             sender: Some(sender),
-        })
-        .await?;
+        })?;
         recver.await?
     }
 
@@ -519,14 +517,14 @@ impl Channel {
     }
 
     pub async fn send_signal(&self, signal: impl Into<Signal>) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let request = Request::ChannelSendSignal {
             id: self.id,
             signal: signal.into(),
             sender,
         };
 
-        self.send_request(request).await?;
+        self.send_request(request)?;
 
         recver.await?
     }
@@ -534,7 +532,7 @@ impl Channel {
     pub async fn set_env(&self, name: impl Into<String>, value: impl Into<Vec<u8>>) -> Result<()> {
         let name = name.into();
         let value = value.into();
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let request = Request::ChannelSetEnv {
             id: self.id,
             name,
@@ -542,20 +540,20 @@ impl Channel {
             sender,
         };
 
-        self.send_request(request).await?;
+        self.send_request(request)?;
 
         recver.await?
     }
 
     pub async fn exec(&self, cmd: impl Into<String>) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let request = Request::ChannelExec {
             id: self.id,
             cmd: cmd.into(),
             sender,
         };
 
-        self.send_request(request).await?;
+        self.send_request(request)?;
 
         recver.await?
     }
@@ -566,49 +564,48 @@ impl Channel {
 
     pub async fn write(&self, data: impl Into<Vec<u8>>) -> Result<usize> {
         let data: Vec<u8> = data.into();
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let request = Request::ChannelWriteStdout {
             id: self.id,
             data,
             sender,
         };
 
-        self.send_request(request).await?;
+        self.send_request(request)?;
 
         recver.await?
     }
 
     pub async fn eof(&self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let request = Request::ChannelEof {
             id: self.id,
             sender,
         };
-        self.send_request(request).await?;
+        self.send_request(request)?;
 
         recver.await?
     }
 
     pub async fn request_shell(&self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let request = Request::ChannelReuqestShell {
             id: self.id,
             sender,
         };
 
-        self.send_request(request).await?;
+        self.send_request(request)?;
 
         recver.await?
     }
 
-    async fn send_request(&self, msg: Request) -> Result<()> {
+    fn send_request(&self, msg: Request) -> Result<()> {
         self.session
             .send(msg)
-            .await
             .map_err(|_| Error::Disconnected)
     }
 
-    pub(crate) fn session(&self) -> mpsc::Sender<Request> {
+    pub(crate) fn session(&self) -> MSender<Request> {
         (*self.session).clone()
     }
 }
@@ -641,20 +638,20 @@ pub(crate) struct ChannelInner {
     pub(crate) server: Endpoint,
     // pub(crate) stdout: IOSender,
     // pub(crate) stderr: IOSender,
-    pub(crate) sender: mpsc::Sender<Message>,
+    pub(crate) sender: MSender<Message>,
     // #[new(default)]
     // pub(crate) stdout_buf: Vec<u8>,
     // pub(crate) exit_status: Option<ExitStatus>,
 }
 
 impl ChannelInner {
-    pub(crate) async fn server_close(&mut self) {
+    pub(crate) fn server_close(&mut self) {
         self.server.closed = true;
-        let _ = self.sender.send(Message::Close).await;
+        let _ = self.sender.send(Message::Close);
     }
 
-    pub(crate) async fn server_eof(&mut self) {
+    pub(crate) fn server_eof(&mut self) {
         self.server.eof = true;
-        let _ = self.sender.send(Message::Eof).await;
+        let _ = self.sender.send(Message::Eof);
     }
 }

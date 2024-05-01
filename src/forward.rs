@@ -5,16 +5,15 @@ use std::{
     task::{Context, Poll},
 };
 
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    sync::{mpsc, oneshot},
-};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{channel::Channel, msg::Request};
 use crate::{
     channel::Stream as ChannelStream,
     error::{Error, Result},
 };
+
+use super::{MSender, MReceiver, o_channel};
 
 pub struct Stream {
     channel: ChannelStream,
@@ -84,15 +83,15 @@ impl Stream {
 }
 
 pub struct Listener {
-    session: ManuallyDrop<mpsc::Sender<Request>>,
-    recver: ManuallyDrop<mpsc::Receiver<Stream>>,
+    session: ManuallyDrop<MSender<Request>>,
+    recver: ManuallyDrop<MReceiver<Stream>>,
     address: ManuallyDrop<String>,
     port: u32,
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        let _ = self.session.try_send(Request::CancelTcpipForward {
+        let _ = self.session.send(Request::CancelTcpipForward {
             address: (*self.address).clone(),
             port: self.port,
             sender: None,
@@ -104,8 +103,8 @@ impl Drop for Listener {
 
 impl Listener {
     pub(crate) fn new(
-        session: mpsc::Sender<Request>,
-        recver: mpsc::Receiver<Stream>,
+        session: MSender<Request>,
+        recver: MReceiver<Stream>,
         address: String,
         port: u32,
     ) -> Self {
@@ -130,7 +129,7 @@ impl Listener {
     }
 
     pub async fn cancel(mut self) -> Result<()> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let request = Request::CancelTcpipForward {
             address: (*self.address).clone(),
             port: self.port,
@@ -139,7 +138,6 @@ impl Listener {
 
         self.session
             .send(request)
-            .await
             .map_err(|_| Error::Disconnected)?;
 
         self.manually_drop();

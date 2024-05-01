@@ -5,107 +5,108 @@ use super::sftp::SFtp;
 use super::ssh::common::code::*;
 use crate::forward::Listener;
 use crate::ssh::buffer::Buffer;
-use tokio::sync::oneshot;
+use super::OSender;
 
 pub(crate) enum Request {
     SessionDrop {
         reson: DisconnectReson,
         desc: String,
+        sender: Option<OSender<Result<()>>>,
     },
     UserAuthPassWord {
         username: String,
         password: String,
-        sender: oneshot::Sender<Result<Userauth>>,
+        sender: OSender<Result<Userauth>>,
     },
     UserauthPublickey {
         username: String,
         method: String,
         publickey: Vec<u8>,
         privatekey: Vec<u8>,
-        sender: oneshot::Sender<Result<Userauth>>,
+        sender: OSender<Result<Userauth>>,
     },
     UserauthNone {
         username: String,
-        sender: oneshot::Sender<Result<Userauth>>,
+        sender: OSender<Result<Userauth>>,
     },
     ChannelOpenSession {
         initial: u32,
         maximum: u32,
-        sender: oneshot::Sender<Result<Channel>>,
+        sender: OSender<Result<Channel>>,
     },
     ChannelExec {
         id: u32,
         cmd: String,
-        sender: oneshot::Sender<Result<()>>,
+        sender: OSender<Result<()>>,
     },
     TcpipForward {
         address: String,
         port: u32,
         initial: u32,
         maximum: u32,
-        sender: oneshot::Sender<Result<Listener>>,
+        sender: OSender<Result<Listener>>,
     },
     CancelTcpipForward {
         address: String,
         port: u32,
-        sender: Option<oneshot::Sender<Result<()>>>,
+        sender: Option<OSender<Result<()>>>,
     },
     DirectTcpip {
         initial: u32,
         maximum: u32,
         remote: (String, u32),
         local: (String, u32),
-        sender: oneshot::Sender<Result<Channel>>,
+        sender: OSender<Result<Channel>>,
     },
     // ChannelExecWait {
     //     id: u32,
     //     cmd: String,
-    //     sender: oneshot::Sender<Result<ExitStatus>>,
+    //     sender: OSender<Result<ExitStatus>>,
     // },
     // ChannelGetExitStatus {
     //     id: u32,
-    //     sender: oneshot::Sender<Result<ExitStatus>>,
+    //     sender: OSender<Result<ExitStatus>>,
     // },
     ChannelDrop {
         id: u32,
-        sender: Option<oneshot::Sender<Result<()>>>,
+        sender: Option<OSender<Result<()>>>,
     },
     ChannelWriteStdout {
         id: u32,
         data: Vec<u8>,
-        sender: oneshot::Sender<Result<usize>>,
+        sender: OSender<Result<usize>>,
     },
     ChannelSetEnv {
         id: u32,
         name: String,
         value: Vec<u8>,
-        sender: oneshot::Sender<Result<()>>,
+        sender: OSender<Result<()>>,
     },
     ChannelSendSignal {
         id: u32,
         signal: Signal,
-        sender: oneshot::Sender<Result<()>>,
+        sender: OSender<Result<()>>,
     },
     ChannelEof {
         id: u32,
-        sender: oneshot::Sender<Result<()>>,
+        sender: OSender<Result<()>>,
     },
     // ChannelFlushStdout {
     //     id: u32,
-    //     sender: oneshot::Sender<Result<()>>,
+    //     sender: OSender<Result<()>>,
     // },
     ChannelReuqestShell {
         id: u32,
-        sender: oneshot::Sender<Result<()>>,
+        sender: OSender<Result<()>>,
     },
     SFtpFromChannel {
         channel: Channel,
-        sender: oneshot::Sender<Result<SFtp>>,
+        sender: OSender<Result<SFtp>>,
     },
     SFtpOpen {
         initial: u32,
         maximum: u32,
-        sender: oneshot::Sender<Result<SFtp>>,
+        sender: OSender<Result<SFtp>>,
     },
 }
 

@@ -33,7 +33,9 @@ use crate::ssh::stream::PlainStream;
 use derive_new::new;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use tokio::sync::{mpsc, oneshot};
+
+use super::{MSender, MReceiver, MWSender};
+use super::{m_channel, o_channel};
 
 macro_rules! channel_loop {
     ($sel:ident,$id:expr,$($e:pat $(if $c:expr )? => $h:expr,)*) => {
@@ -109,7 +111,7 @@ impl DisconnectReson {
 // }
 
 pub struct Session {
-    sender: ManuallyDrop<mpsc::Sender<Request>>,
+    sender: ManuallyDrop<MSender<Request>>,
 }
 
 impl Drop for Session {
@@ -117,21 +119,22 @@ impl Drop for Session {
         let request = Request::SessionDrop {
             reson: DisconnectReson::BY_APPLICATION,
             desc: "exit".to_string(),
+            sender: None
         };
-        let _ = self.sender.try_send(request);
+        let _ = self.sender.send(request);
         self.manually_drop()
     }
 }
 
 impl Session {
-    fn new(sender: mpsc::Sender<Request>) -> Self {
+    fn new(sender: MSender<Request>) -> Self {
         Self {
             sender: ManuallyDrop::new(sender),
         }
     }
 
-    async fn send_request(&self, msg: Request) -> Result<()> {
-        self.sender.send(msg).await.map_err(|_| Error::Disconnected)
+    fn send_request(&self, msg: Request) -> Result<()> {
+        self.sender.send(msg).map_err(|_| Error::Disconnected)
     }
 
     fn manually_drop(&mut self) {
@@ -157,7 +160,7 @@ impl Session {
         remote: (impl Into<String>, u32),
         local: (impl Into<String>, u32),
     ) -> Result<Stream> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let address: String = remote.0.into();
         self.send_request(Request::DirectTcpip {
             initial,
@@ -165,8 +168,7 @@ impl Session {
             remote: (address.clone(), remote.1),
             local: (local.0.into(), local.1),
             sender,
-        })
-        .await?;
+        })?;
         let channel = recver.await??;
 
         Ok(Stream::new(channel, address, remote.1))
@@ -188,22 +190,20 @@ impl Session {
         initial: u32,
         maximum: u32,
     ) -> Result<Listener> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         self.send_request(Request::TcpipForward {
             address: address.into(),
             port,
             initial,
             maximum,
             sender,
-        })
-        .await?;
+        })?;
 
         recver.await?
     }
 
     pub async fn disconnect_default(self) -> Result<()> {
-        self.disconnect(DisconnectReson::BY_APPLICATION, "exit")
-            .await
+        self.disconnect(DisconnectReson::BY_APPLICATION, "exit").await
     }
 
     pub async fn disconnect(
@@ -211,11 +211,17 @@ impl Session {
         reson: DisconnectReson,
         desc: impl Into<String>,
     ) -> Result<()> {
+        let (sender, recver) = o_channel();
         let request = Request::SessionDrop {
             reson,
             desc: desc.into(),
+            sender: Some(sender)
         };
-        let res = self.send_request(request).await;
+        let res = async {
+            self.send_request(request)?;
+
+            recver.await?
+        }.await;
 
         self.manually_drop();
         std::mem::forget(self);
@@ -229,13 +235,12 @@ impl Session {
     }
 
     pub async fn sftp_open(&self, initial: u32, maximum: u32) -> Result<SFtp> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         self.send_request(Request::SFtpOpen {
             initial,
             maximum,
             sender,
-        })
-        .await?;
+        })?;
 
         recver.await?
     }
@@ -246,14 +251,14 @@ impl Session {
     }
 
     pub async fn channel_open(&self, initial: u32, maximum: u32) -> Result<Channel> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let msg = Request::ChannelOpenSession {
             initial,
             maximum,
             sender,
         };
 
-        self.send_request(msg).await?;
+        self.send_request(msg)?;
 
         recver.await?
     }
@@ -261,11 +266,11 @@ impl Session {
     pub async fn userauth_none(&self, username: impl Into<String>) -> Result<Userauth> {
         let username = username.into();
 
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
 
         let requset = Request::UserauthNone { username, sender };
 
-        self.send_request(requset).await?;
+        self.send_request(requset)?;
 
         recver.await?
     }
@@ -277,7 +282,7 @@ impl Session {
         publickey: impl Into<Vec<u8>>,
         privatekey: impl Into<Vec<u8>>,
     ) -> Result<Userauth> {
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
         let request = Request::UserauthPublickey {
             username: username.into(),
             method: method.into(),
@@ -285,7 +290,7 @@ impl Session {
             privatekey: privatekey.into(),
             sender,
         };
-        self.send_request(request).await?;
+        self.send_request(request)?;
 
         recver.await?
     }
@@ -298,7 +303,7 @@ impl Session {
         let username = username.into();
         let password = password.into();
 
-        let (sender, recver) = oneshot::channel();
+        let (sender, recver) = o_channel();
 
         let request = Request::UserAuthPassWord {
             username,
@@ -308,7 +313,6 @@ impl Session {
 
         self.sender
             .send(request)
-            .await
             .map_err(|_| Error::Disconnected)?;
         recver.await?
     }
@@ -370,7 +374,7 @@ impl Session {
 
         algo.initialize(&mut result)?;
 
-        let (sender, recver) = mpsc::channel(4096);
+        let (sender, recver) = m_channel();
 
         let weak_sender = sender.downgrade();
         let session = Session::new(sender);
@@ -396,7 +400,7 @@ impl Session {
 
 #[derive(new)]
 struct ListenerInner {
-    sender: mpsc::Sender<Stream>,
+    sender: MSender<Stream>,
     initial: u32,
     maximum: u32,
 }
@@ -411,14 +415,14 @@ where
     stream: CipherStream<T>,
     _client: Endpoint,
     _server: Endpoint,
-    recver: mpsc::Receiver<Request>,
+    recver: MReceiver<Request>,
 
     #[new(default)]
     channels: HashMap<u32, ChannelInner>,
 
     #[new(default)]
     listeners: HashMap<(String, u32), ListenerInner>,
-    weak_sender: mpsc::WeakSender<Request>,
+    weak_sender: MWSender<Request>,
     behaivor: Option<B>,
 }
 
@@ -505,7 +509,7 @@ where
                 self.append_channel_stderr(recipient, data).await?;
             }
             Message::ChannelEof(recipient) => {
-                self.handle_channel_eof(recipient).await;
+                self.handle_channel_eof(recipient);
             }
             Message::ChannelClose(recipient) => {
                 self.handle_channel_close(recipient).await?;
@@ -526,8 +530,7 @@ where
                         core_dumped,
                         error_msg,
                         tag,
-                    )))
-                    .await;
+                    )));
 
                 // channel.exit_status = Some(ExitStatus::new_interrupt(
                 //     signal,
@@ -540,8 +543,7 @@ where
                 let channel = self.get_server_channel(recipient)?;
                 let _ = channel
                     .sender
-                    .send(ChannelMsg::Exit(ExitStatus::new_normal(status)))
-                    .await;
+                    .send(ChannelMsg::Exit(ExitStatus::new_normal(status)));
                 // channel.exit_status = Some(ExitStatus::new_normal(status));
             }
             Message::Disconnect {
@@ -616,7 +618,7 @@ where
         Ok(())
     }
 
-    fn upgrade_sender(&self) -> Result<mpsc::Sender<Request>> {
+    fn upgrade_sender(&self) -> Result<MSender<Request>> {
         self.weak_sender
             .upgrade()
             .ok_or(Error::ub("Session has been dropped"))
@@ -649,7 +651,7 @@ where
 
                 self.stream.send_payload(buffer.as_ref()).await?;
 
-                let (tx, rx) = mpsc::channel(4096);
+                let (tx, rx) = m_channel();
 
                 let channel = Channel::new(client_id, rx, session);
                 use super::channel::Endpoint as ChannelEp;
@@ -663,7 +665,7 @@ where
                 self.channels.insert(client_id, inner);
 
                 let socket = Stream::new(channel, originator_address, originator_port);
-                let _ = listener.sender.send(socket).await;
+                let _ = listener.sender.send(socket);
             }
             None => {
                 buffer.put_u8(SSH_MSG_CHANNEL_OPEN_FAILURE);
@@ -686,12 +688,12 @@ where
         self.stream.send_payload(buffer.as_ref()).await
     }
 
-    async fn handle_channel_eof(&mut self, id: u32) -> bool {
+    fn handle_channel_eof(&mut self, id: u32) -> bool {
         let Some(channel) = self.channels.get_mut(&id) else {
             return false;
         };
 
-        channel.server_eof().await;
+        channel.server_eof();
 
         true
     }
@@ -720,7 +722,7 @@ where
         if let Some(channel) = self.channels.get_mut(&recipient) {
             channel.client.size -= data.len() as u32;
 
-            let value = channel.sender.send(ChannelMsg::Stderr(data)).await.is_ok();
+            let value = channel.sender.send(ChannelMsg::Stderr(data)).is_ok();
             // let value = channel.stderr.write(data).await.is_ok();
             if channel.client.size < channel.client.maximum {
                 let count = channel.client.initial - channel.client.size;
@@ -740,7 +742,7 @@ where
     async fn append_channel_stdout(&mut self, recipient: u32, data: Vec<u8>) -> Result<bool> {
         if let Some(channel) = self.channels.get_mut(&recipient) {
             channel.client.size -= data.len() as u32;
-            let value = channel.sender.send(ChannelMsg::Stdout(data)).await.is_ok();
+            let value = channel.sender.send(ChannelMsg::Stdout(data)).is_ok();
             // let value = channel.stdout.write(data).await.is_ok();
             if channel.client.size < channel.client.maximum {
                 let count = channel.client.initial - channel.client.size;
@@ -844,8 +846,11 @@ where
                 let res = self.channel_send_signal(id, &signal.0).await;
                 let _ = sender.send(res);
             }
-            Request::SessionDrop { reson, desc } => {
-                let _ = self.session_disconnect(reson, &desc).await;
+            Request::SessionDrop { reson, desc , sender } => {
+                let res = self.session_disconnect(reson, &desc).await;
+                if let Some(sender) = sender {
+                    let _ = sender.send(res);
+                }
                 return true;
             }
             // Request::ChannelFlushStdout { id, sender } => {
@@ -941,7 +946,7 @@ where
                 } if recipient == client_id => {
                     let client = ChannelEndpoint::new(client_id, initial, maximum);
                     let server = ChannelEndpoint::new(sender, server_initial, server_maximum);
-                    let (sender, recver) = mpsc::channel(4096);
+                    let (sender, recver) = m_channel();
 
                     let channel = Channel::new(client.id, recver, session);
 
@@ -1024,7 +1029,7 @@ where
                             .take_u32()
                             .ok_or(Error::invalid_format("Invalid port"))?;
                     }
-                    let (sender, recver) = mpsc::channel(4096);
+                    let (sender, recver) = m_channel();
 
                     self.listeners.insert(
                         (address.to_string(), port),
@@ -1430,7 +1435,7 @@ where
             ));
         }
 
-        channel.server_close().await;
+        channel.server_close();
         // std::mem::take(&mut channel.stdout_buf);
 
         if !channel.client.closed {
@@ -1561,7 +1566,7 @@ where
         // let stdout = io_channel();
         // let stderr = io_channel();
 
-        let (sender, recver) = mpsc::channel(4096);
+        let (sender, recver) = m_channel();
 
         let channel = Channel::new(client.id, recver, session);
 
