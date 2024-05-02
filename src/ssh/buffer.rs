@@ -4,16 +4,80 @@ use std::{
     ops::{Index, IndexMut},
 };
 
+#[macro_export]
+macro_rules! match_type {
+    (u8 $(,$i:expr)?) => {
+        1
+    };
+    (u32 $(,$i:expr)?) => {
+        4
+    };
+    (u64 $(,$i:expr)?) => {
+        8
+    };
+    (one, $i:expr) => {
+        (4 + $i.len())
+    };
+    (bytes, $i:expr) => {
+        $i.len()
+    };
+}
+
+#[macro_export]
+macro_rules! put_type {
+    ($buffer:ident, u8, $i:expr) => {
+        $buffer.put_u8($i);
+    };
+    ($buffer:ident, u32, $i:expr) => {
+        $buffer.put_u32($i)
+    };
+    ($buffer:ident, u64, $i:expr) => {
+        $buffer.put_u64($i)
+    };
+    ($buffer:ident, one, $i:expr) => {
+        $buffer.put_one($i)
+    };
+    ($buffer:ident, bytes, $i:expr) => {
+        $buffer.put_bytes($i)
+    };
+}
+
+#[macro_export]
+macro_rules! make_buffer {
+    ($($ty:ident: $value:expr $(,)?)+) => {
+        {
+            let len = $( match_type!($ty, $value) + )+ 0;
+            let cap = len + 4;
+            let mut buffer = Buffer::with_capacity(cap);
+            buffer.put_u32(len as u32);
+            $( put_type!(buffer, $ty, $value); )+
+            buffer
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! make_buffer_without_header {
+    ($($ty:ident: $value:expr $(,)?)+) => {
+        {
+            let len = $( match_type!($ty, $value) + )+ 0;
+            let mut buffer = Buffer::with_capacity(len);
+            $( put_type!(buffer, $ty, $value); )+
+            buffer
+        }
+    };
+}
+
 // todo: Improve performance
 #[derive(Default, Clone, Debug)]
 #[repr(transparent)]
 pub struct Buffer<T>(T);
 
-// impl From<Buffer> for Vec<u8> {
-//     fn from(value: Buffer) -> Self {
-//         value.into_vec()
-//     }
-// }
+impl From<Buffer<Vec<u8>>> for Vec<u8> {
+    fn from(value: Buffer<Vec<u8>>) -> Self {
+        value.into_vec()
+    }
+}
 
 // impl From<Vec<u8>> for Buffer {
 //     fn from(value: Vec<u8>) -> Self {
@@ -162,6 +226,10 @@ impl Buffer<Vec<u8>> {
         Default::default()
     }
 
+    pub fn with_capacity(size: usize) -> Self {
+        Self(Vec::with_capacity(size))
+    }
+
     pub fn from_vec(vec: Vec<u8>) -> Self {
         Buffer(vec)
     }
@@ -182,19 +250,19 @@ impl Buffer<Vec<u8>> {
         self.0
     }
 
-    pub fn take_u64(&mut self) -> Option<u64> {
-        if self.0.len() < size_of::<u64>() {
-            return None;
-        }
+    // pub fn take_u64(&mut self) -> Option<u64> {
+    //     if self.0.len() < size_of::<u64>() {
+    //         return None;
+    //     }
 
-        let num = u64::from_be_bytes([
-            self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
-        ]);
+    //     let num = u64::from_be_bytes([
+    //         self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
+    //     ]);
 
-        self.0.drain(..size_of::<u64>());
+    //     self.0.drain(..size_of::<u64>());
 
-        Some(num)
-    }
+    //     Some(num)
+    // }
 
     pub fn take_u32(&mut self) -> Option<u32> {
         if self.0.len() < size_of::<u32>() {

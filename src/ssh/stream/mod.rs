@@ -128,6 +128,14 @@ impl<T: AsyncWrite + Unpin> BufferStream<T> {
         }
         self.socket.flush().await
     }
+
+    pub async fn write_all(&mut self, data: impl AsRef<[u8]>) -> io::Result<()> {
+        self.w_buf.put(data.as_ref());
+        while !self.w_buf.is_empty() {
+            self.socket.write_buf(&mut self.w_buf).await?;
+        }
+        self.socket.flush().await
+    }
 }
 
 impl<T: AsyncRead + Unpin> BufferStream<T> {
@@ -635,11 +643,12 @@ where
         Ok(packet)
     }
 
-    pub async fn send_payload(&mut self, mut payload: &[u8]) -> Result<()> {
+    pub async fn send_payload(&mut self, payload: impl AsRef<[u8]>) -> Result<()> {
         /*
           If compression has been negotiated, the 'payload' field (and only it)
            will be compressed using the negotiated algorithm.
         */
+        let mut payload = payload.as_ref();
         let compress = self.authed || self.encode.compress_in_auth();
 
         // let payload = payload.to_vec();

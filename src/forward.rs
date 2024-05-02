@@ -13,7 +13,7 @@ use crate::{
     error::{Error, Result},
 };
 
-use super::{MSender, MReceiver, o_channel};
+use super::{o_channel, MReceiver, MSender};
 
 pub struct Stream {
     channel: ChannelStream,

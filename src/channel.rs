@@ -16,9 +16,9 @@ use tokio::io::ReadBuf;
 
 use super::error::{Error, Result};
 use super::msg::Request;
-use super::{MSender, MReceiver, o_channel};
+use super::{o_channel, MReceiver, MSender};
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
 
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -140,7 +140,7 @@ impl AsyncWrite for Stream {
     ) -> Poll<io::Result<usize>> {
         if self.write_future.is_none() {
             let future = self.channel.write(buf);
-            let future: Pin<Box<dyn Future<Output = Result<usize>> + Send>> = Box::pin(future);
+            let future: BoxFuture<'_, Result<usize>> = Box::pin(future);
 
             self.write_future = unsafe { transmute(Some(future)) };
         }
@@ -149,10 +149,7 @@ impl AsyncWrite for Stream {
 
         Poll::Ready(match res {
             Ok(size) => Ok(size),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "Connection lost",
-            )),
+            Err(err) => Err(io::Error::new(io::ErrorKind::Other, Box::new(err))),
         })
     }
 
@@ -188,10 +185,7 @@ impl AsyncRead for Stream {
                 buf.put_slice(&data);
                 Ok(())
             }
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "Connection lost",
-            )),
+            Err(err) => Err(io::Error::new(io::ErrorKind::Other, Box::new(err))),
         })
     }
 }
@@ -481,11 +475,7 @@ impl Drop for Channel {
 }
 
 impl Channel {
-    pub(crate) fn new(
-        id: u32,
-        channel: MReceiver<Message>,
-        session: MSender<Request>,
-    ) -> Self {
+    pub(crate) fn new(id: u32, channel: MReceiver<Message>, session: MSender<Request>) -> Self {
         Self {
             id,
             recver: ManuallyDrop::new(channel),
@@ -600,9 +590,7 @@ impl Channel {
     }
 
     fn send_request(&self, msg: Request) -> Result<()> {
-        self.session
-            .send(msg)
-            .map_err(|_| Error::Disconnected)
+        self.session.send(msg).map_err(|_| Error::Disconnected)
     }
 
     pub(crate) fn session(&self) -> MSender<Request> {

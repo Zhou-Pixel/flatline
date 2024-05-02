@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::cmp::min;
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 use derive_new::new;
 
@@ -16,6 +17,8 @@ use crate::{
 
 use super::o_channel;
 use bitflags::bitflags;
+
+use super::{make_buffer, match_type, put_type};
 
 bitflags! {
     // https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-01#section-7.3
@@ -61,7 +64,7 @@ impl Statvfs {
     pub const FLAG_RDONLY: u64 = 0x1;
     pub const FLAG_NOSUID: u64 = 0x2;
     fn parse(data: &[u8]) -> Option<Self> {
-        let mut buffer = Buffer::from_vec(data.to_vec());
+        let buffer = Buffer::from_slice(data);
 
         Some(Self {
             bsize: buffer.take_u64()?,
@@ -165,6 +168,12 @@ pub struct Attributes {
 }
 
 impl Attributes {
+    fn to_buffer(&self) -> Buffer<Vec<u8>> {
+        let mut buffer = Buffer::new();
+        self.to_bytes(&mut buffer);
+        buffer
+    }
+
     fn to_bytes(&self, buffer: &mut Buffer<Vec<u8>>) {
         let mut flags = 0;
         let mut tmp = Buffer::new();
@@ -266,7 +275,7 @@ pub struct Limits {
 
 impl Limits {
     fn parse(data: &[u8]) -> Option<Self> {
-        let mut buffer = Buffer::from_vec(data.to_vec());
+        let buffer = Buffer::from_slice(data);
 
         Some(Self {
             max_packet_len: buffer.take_u64()?,
@@ -467,12 +476,20 @@ impl SFtp {
         let session = channel.session();
         let request = Request::SFtpFromChannel { channel, sender };
 
-        session
-            .send(request)
-            .map_err(|_| Error::Disconnected)?;
+        session.send(request).map_err(|_| Error::Disconnected)?;
 
         recver.await?
     }
+
+    pub async fn close(self) -> Result<()> {
+        self.channel.into_inner().close().await
+    }
+
+    // pub async fn flush(&mut self) -> Result<()> {
+    //     self.channel.flush().await?;
+    //     Ok(())
+    // }
+
     // pub async fn flush(&self) -> Result<()> {
     //     self.channel.inner().inner().flush().await
     //}
@@ -482,16 +499,26 @@ impl SFtp {
     }
 
     pub async fn posix_rename(&mut self, oldpath: &str, newpath: &str) -> Result<()> {
-        let mut buffer = Buffer::new();
+        // let mut buffer = Buffer::new();
 
         let request_id = self.genarate_request_id();
 
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_POSIX_RENAME.0);
-        buffer.put_one(oldpath);
-        buffer.put_one(newpath);
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_POSIX_RENAME.0);
+        // buffer.put_one(oldpath);
+        // buffer.put_one(newpath);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_POSIX_RENAME.0,
+            one: oldpath,
+            one: newpath,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         self.wait_for_status(request_id, Status::no_eof).await
     }
@@ -504,12 +531,21 @@ impl SFtp {
         debug_assert!(self.support_fstatvfs(), "Server doesn't support fstatvfs");
 
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_FSTATVFS.0);
-        buffer.put_one(&file.handle);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_FSTATVFS.0);
+        // buffer.put_one(&file.handle);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_FSTATVFS.0,
+            one: &file.handle,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -529,12 +565,21 @@ impl SFtp {
         debug_assert!(self.support_fstatvfs(), "Server doesn't support statvfs");
 
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_STATVFS.0);
-        buffer.put_one(path);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_STATVFS.0);
+        // buffer.put_one(path);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_STATVFS.0,
+            one: path,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -554,13 +599,24 @@ impl SFtp {
         debug_assert!(self.support_hardlink(), "Server doesn't support hardlink");
 
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_HARDLINK.0);
-        buffer.put_one(oldpath);
-        buffer.put_one(newpath);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_HARDLINK.0);
+        // buffer.put_one(oldpath);
+        // buffer.put_one(newpath);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_HARDLINK.0,
+            one: oldpath,
+            one: newpath,
+        };
+
+        self.channel.write_all(buffer).await?;
+
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
@@ -572,12 +628,22 @@ impl SFtp {
         debug_assert!(self.support_fsync(), "Server doesn't support fsync");
 
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_FSYNC.0);
-        buffer.put_one(&file.handle);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_FSYNC.0);
+        // buffer.put_one(&file.handle);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_FSYNC.0,
+            one: &file.handle,
+        };
+
+        self.channel.write_all(buffer).await?;
+
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
@@ -589,13 +655,26 @@ impl SFtp {
         debug_assert!(self.support_lsetstat(), "Server doesn't lsetstat");
 
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_LSETSTAT.0);
-        buffer.put_one(path);
-        attrs.to_bytes(&mut buffer);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_LSETSTAT.0);
+        // buffer.put_one(path);
+        // attrs.to_bytes(&mut buffer);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let attrs = attrs.to_buffer();
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_LSETSTAT.0,
+            one: path,
+            bytes: attrs,
+        };
+
+        self.channel.write_all(buffer).await?;
+
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
@@ -606,10 +685,18 @@ impl SFtp {
     pub async fn limits(&mut self) -> Result<Limits> {
         debug_assert!(self.support_limits(), "Server doesn't support limits");
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_one(OPENSSH_SFTP_EXT_LIMITS.0);
+        // let mut buffer = Buffer::new();
+        // buffer.put_one(OPENSSH_SFTP_EXT_LIMITS.0);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_LIMITS.0
+        };
+
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -633,12 +720,21 @@ impl SFtp {
         );
 
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_EXPAND_PATH.0);
-        buffer.put_one(path);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_EXPAND_PATH.0);
+        // buffer.put_one(path);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_EXPAND_PATH.0,
+            one: path
+        };
+
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -657,16 +753,29 @@ impl SFtp {
         debug_assert!(self.support_copy_data(), "Server doesn't support copy data");
 
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_COPY_DATA.0);
-        buffer.put_one(&read.handle);
-        buffer.put_u64(read.pos);
-        buffer.put_u64(len);
-        buffer.put_one(&write.handle);
-        buffer.put_u64(write.pos);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_COPY_DATA.0);
+        // buffer.put_one(&read.handle);
+        // buffer.put_u64(read.pos);
+        // buffer.put_u64(len);
+        // buffer.put_one(&write.handle);
+        // buffer.put_u64(write.pos);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_COPY_DATA.0,
+            one: &read.handle,
+            u64: read.pos,
+            u64: len,
+            one: &write.handle,
+            u64: write.pos,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         let status = self.wait_for_status(request_id, Status::to_result).await;
 
@@ -689,12 +798,28 @@ impl SFtp {
         );
 
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(OPENSSH_SFTP_EXT_HOME_DIRECTORY.0);
-        buffer.put_one(username);
+        // cap: 4 + 1 + 4 + 4 + xx.len() + 4 + username.len()
+        // let mut buffer = Buffer::with_capacity(
+        //     4 + 1 + 4 + 4 + OPENSSH_SFTP_EXT_HOME_DIRECTORY.0.len() + 4 + username.len(),
+        // );
+        // buffer.put_u32(
+        //     (4 + 1 + 4 + 4 + OPENSSH_SFTP_EXT_HOME_DIRECTORY.0.len() + 4 + username.len()) as u32,
+        // );
+        // buffer.put_u8(SSH_FXP_EXTENDED);
+        // buffer.put_u32(request_id);
+        // buffer.put_one(OPENSSH_SFTP_EXT_HOME_DIRECTORY.0);
+        // buffer.put_one(username);
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        // self.write(buffer).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_EXTENDED,
+            u32: request_id,
+            one: OPENSSH_SFTP_EXT_HOME_DIRECTORY.0,
+            one: username
+        };
+
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -715,7 +840,17 @@ impl SFtp {
         groups: &[u32],
     ) -> Result<(Vec<String>, Vec<String>)> {
         let request_id = self.genarate_request_id();
-        let mut buffer = Buffer::new();
+        let cap = 4
+            + 1
+            + 4
+            + OPENSSH_SFTP_EXT_USERS_GROUPS_BY_ID.0.len()
+            + 4
+            + users.len() * 4
+            + 4
+            + groups.len() * 4;
+        let mut buffer = Buffer::with_capacity(cap);
+        buffer.put_u32((cap - 4) as u32);
+        buffer.put_u8(SSH_FXP_EXTENDED);
         buffer.put_u32(request_id);
         buffer.put_one(OPENSSH_SFTP_EXT_USERS_GROUPS_BY_ID.0);
 
@@ -731,7 +866,7 @@ impl SFtp {
             buffer.put_u32(*v);
         });
 
-        self.send(SSH_FXP_EXTENDED, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -795,12 +930,20 @@ impl SFtp {
     pub async fn close_file(&mut self, file: File) -> Result<()> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
+        // let mut buffer = Buffer::new();
 
-        buffer.put_u32(request_id);
-        buffer.put_one(file.handle);
+        // buffer.put_u32(request_id);
+        // buffer.put_one(file.handle);
 
-        self.send(SSH_FXP_CLOSE, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_CLOSE, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_CLOSE,
+            u32: request_id,
+            one: file.handle,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         self.wait_for_status(request_id, Status::no_eof).await
     }
@@ -808,18 +951,35 @@ impl SFtp {
     pub async fn read_file(&mut self, file: &mut File, max: u32) -> Result<Vec<u8>> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
+        // // cap: 4 + 1 + 4 + (4 + file.handle.len()) + 8 + 4
+        // let len = 1 + 4 + 4 + file.handle.len() + 8 + 4;
+        // let mut buffer = Buffer::with_capacity(4 + len);
 
-        buffer.put_u32(request_id);
+        // buffer.put_u32(len as u32);
+        // buffer.put_u8(SSH_FXP_READ);
 
-        buffer.put_one(&file.handle);
-        buffer.put_u64(file.pos);
+        // buffer.put_u32(request_id);
 
-        buffer.put_u32(max);
+        // buffer.put_one(&file.handle);
+        // buffer.put_u64(file.pos);
 
-        self.send(SSH_FXP_READ, buffer.as_ref()).await?;
+        // buffer.put_u32(max);
 
-        let packet = self.recv().await?;
+        // self.write(buffer).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_READ,
+            u32: request_id,
+            one: &file.handle,
+            u64: file.pos,
+            u32: max
+        };
+
+        self.channel.write_all(buffer).await?;
+
+        // self.send(SSH_FXP_READ, buffer.as_ref()).await?;
+
+        let packet = self.wait_for_packet(request_id).await?;
 
         match packet.msg {
             Message::Data(data) => {
@@ -831,16 +991,22 @@ impl SFtp {
         }
     }
 
-    async fn send(&mut self, code: u8, bytes: &[u8]) -> Result<()> {
-        let mut packet = Buffer::new();
+    // async fn send(&mut self, code: u8, bytes: &[u8]) -> Result<()> {
+    //     // let mut packet = Buffer::with_capacity(4 + 1 + bytes.len());
 
-        packet.put_u32((bytes.len() + 1) as u32);
-        packet.put_u8(code);
-        packet.put_bytes(bytes);
+    //     // packet.put_u32((bytes.len() + 1) as u32);
+    //     // packet.put_u8(code);
+    //     // packet.put_bytes(bytes);
 
-        self.write(packet.into_vec()).await?;
-        Ok(())
-    }
+    //     let packet = make_buffer! {
+    //         u32: (bytes.len() + 1) as u32,
+    //         u8: code,
+    //         bytes: bytes,
+    //     };
+
+    //     self.write(packet).await?;
+    //     Ok(())
+    // }
 
     pub async fn write_file_buf(&mut self, file: &mut File, data: &[u8]) -> Result<()> {
         if data.is_empty() {
@@ -848,7 +1014,9 @@ impl SFtp {
         }
         let max = Self::MAX_SFTP_PACKET;
         let mut requests = vec![];
-        let mut buffer = Buffer::new();
+        // cap: 4 + 1 + 4 + 4 + file.handle.len() + 8 + 4 + data
+        let mut buffer =
+            Buffer::with_capacity(4 + 1 + 4 + 4 + file.handle.len() + 8 + 4 + min(max, data.len()));
         for i in (0..data.len()).step_by(max) {
             let left = data.len() - i;
 
@@ -856,12 +1024,14 @@ impl SFtp {
 
             let request_id = self.genarate_request_id();
 
+            buffer.put_u32((1 + 4 + 4 + file.handle.len() + 8 + 4 + min) as u32);
+            buffer.put_u8(SSH_FXP_WRITE);
             buffer.put_u32(request_id);
             buffer.put_one(&file.handle);
             buffer.put_u64(file.pos);
             buffer.put_one(&data[i..i + min]);
 
-            self.send(SSH_FXP_WRITE, buffer.as_ref()).await?;
+            self.channel.write_all(&buffer).await?;
 
             requests.push(request_id);
             file.pos += min as u64;
@@ -890,16 +1060,19 @@ impl SFtp {
 
     async fn write_file_unchecked(&mut self, file: &mut File, data: &[u8]) -> Result<()> {
         // ssh最大数据包检查
-        let mut buffer = Buffer::new();
+        // cap: 4 + 1 + 4 + file.handle.len() + 8 + 4 + data.len()
 
         let request_id = self.genarate_request_id();
 
-        buffer.put_u32(request_id);
-        buffer.put_one(&file.handle);
-        buffer.put_u64(file.pos);
-        buffer.put_one(data);
+        let buffer = make_buffer! {
+            u8: SSH_FXP_WRITE,
+            u32: request_id,
+            one: &file.handle,
+            u64: file.pos,
+            one: data
+        };
 
-        self.send(SSH_FXP_WRITE, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
 
         let res = self.wait_for_status(request_id, Status::no_eof).await;
         if res.is_ok() {
@@ -923,28 +1096,32 @@ impl SFtp {
 
     pub async fn mkdir(&mut self, path: &str, permissions: Permissions) -> Result<()> {
         let request_id = self.genarate_request_id();
-
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(path);
-
         let flags = SSH_FILEXFER_ATTR_PERMISSIONS;
+        let permissions_bits = permissions.bits();
 
-        buffer.put_u32(flags);
-        buffer.put_u32(permissions.bits());
+        let buffer = make_buffer! {
+            u8: SSH_FXP_MKDIR,
+            u32: request_id,
+            one: path,
+            u32: flags,
+            u32: permissions_bits,
+        };
 
-        self.send(SSH_FXP_MKDIR, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
+
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn rmdir(&mut self, path: &str) -> Result<()> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(path);
+        let buffer = make_buffer! {
+            u8: SSH_FXP_RMDIR,
+            u32: request_id,
+            one: path,
+        };
 
-        self.send(SSH_FXP_RMDIR, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
 
         self.wait_for_status(request_id, Status::no_ok).await
     }
@@ -952,11 +1129,13 @@ impl SFtp {
     pub async fn open_dir(&mut self, path: &str) -> Result<Dir> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(path);
+        let buffer = make_buffer! {
+            u8: SSH_FXP_OPENDIR,
+            u32: request_id,
+            one: path,
+        };
 
-        self.send(SSH_FXP_OPENDIR, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -971,23 +1150,34 @@ impl SFtp {
     pub async fn close_dir(&mut self, dir: Dir) -> Result<()> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
+        // let mut buffer = Buffer::new();
 
-        buffer.put_u32(request_id);
-        buffer.put_one(dir.handle);
+        // buffer.put_u32(request_id);
+        // buffer.put_one(dir.handle);
 
-        self.send(SSH_FXP_CLOSE, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_CLOSE, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_CLOSE,
+            u32: request_id,
+            one: dir.handle,
+        };
+
+        self.channel.write_all(buffer).await?;
+
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn read_dir(&mut self, dir: &Dir) -> Result<Vec<FileInfo>> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(&dir.handle);
+        let buffer = make_buffer! {
+            u8: SSH_FXP_READDIR,
+            u32: request_id,
+            one: &dir.handle,
+        };
 
-        self.send(SSH_FXP_READDIR, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -1001,11 +1191,13 @@ impl SFtp {
     pub async fn stat(&mut self, path: &str) -> Result<Attributes> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(path);
+        let buffer = make_buffer! {
+            u8: SSH_FXP_STAT,
+            u32: request_id,
+            one: path,
+        };
 
-        self.send(SSH_FXP_STAT, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -1019,11 +1211,13 @@ impl SFtp {
     pub async fn lstat(&mut self, path: &str) -> Result<Attributes> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(path);
+        let buffer = make_buffer! {
+            u8: SSH_FXP_LSTAT,
+            u32: request_id,
+            one: path,
+        };
 
-        self.send(SSH_FXP_LSTAT, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -1036,12 +1230,13 @@ impl SFtp {
 
     pub async fn fstat(&mut self, file: &File) -> Result<Attributes> {
         let request_id = self.genarate_request_id();
+        let buffer = make_buffer! {
+            u8: SSH_FXP_FSTAT,
+            u32: request_id,
+            one: &file.handle,
+        };
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(&file.handle);
-
-        self.send(SSH_FXP_FSTAT, buffer.as_ref()).await?;
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -1055,13 +1250,22 @@ impl SFtp {
     pub async fn setstat(&mut self, path: &str, attrs: &Attributes) -> Result<()> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(path);
+        let attrs = attrs.to_buffer();
 
-        attrs.to_bytes(&mut buffer);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(path);
 
-        self.send(SSH_FXP_SETSTAT, buffer.as_ref()).await?;
+        // attrs.to_bytes(&mut buffer);
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_SETSTAT,
+            u32: request_id,
+            one: path,
+            bytes: attrs,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         self.wait_for_status(request_id, Status::no_eof).await
     }
@@ -1069,13 +1273,23 @@ impl SFtp {
     pub async fn setfstat(&mut self, file: &File, attrs: &Attributes) -> Result<()> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(&file.handle);
+        let attrs = attrs.to_buffer();
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(&file.handle);
 
-        attrs.to_bytes(&mut buffer);
+        // attrs.to_bytes(&mut buffer);
 
-        self.send(SSH_FXP_FSETSTAT, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_FSETSTAT, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_FSETSTAT,
+            u32: request_id,
+            one: &file.handle,
+            bytes: attrs,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         self.wait_for_status(request_id, Status::no_eof).await
     }
@@ -1083,11 +1297,19 @@ impl SFtp {
     pub async fn readlink(&mut self, path: &str) -> Result<FileInfo> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(path);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(path);
 
-        self.send(SSH_FXP_READLINK, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_READLINK, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_READLINK,
+            u32: request_id,
+            one: path,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         let packet = self.wait_for_packet(request_id).await?;
 
@@ -1101,12 +1323,21 @@ impl SFtp {
     pub async fn symlink(&mut self, linkpath: &str, targetpath: &str) -> Result<()> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(linkpath);
-        buffer.put_one(targetpath);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(linkpath);
+        // buffer.put_one(targetpath);
 
-        self.send(SSH_FXP_SYMLINK, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_SYMLINK, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_SYMLINK,
+            u32: request_id,
+            one: linkpath,
+            one: targetpath,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         self.wait_for_status(request_id, Status::no_eof).await
     }
@@ -1114,11 +1345,20 @@ impl SFtp {
     pub async fn realpath(&mut self, path: &str) -> Result<String> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(path);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(path);
 
-        self.send(SSH_FXP_REALPATH, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_REALPATH, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_REALPATH,
+            u32: request_id,
+            one: path,
+        };
+
+        self.channel.write_all(buffer).await?;
+
         let packet = self.wait_for_packet(request_id).await?;
 
         match packet.msg {
@@ -1131,23 +1371,41 @@ impl SFtp {
     pub async fn rename_file_or_dir(&mut self, old: &str, new: &str) -> Result<()> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(old);
-        buffer.put_one(new);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(old);
+        // buffer.put_one(new);
 
-        self.send(SSH_FXP_RENAME, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_RENAME, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_RENAME,
+            u32: request_id,
+            one: old,
+            one: new,
+        };
+
+        self.channel.write_all(buffer).await?;
+
         self.wait_for_status(request_id, Status::no_eof).await
     }
 
     pub async fn remove_file(&mut self, file: &str) -> Result<()> {
         let request_id = self.genarate_request_id();
 
-        let mut buffer = Buffer::new();
-        buffer.put_u32(request_id);
-        buffer.put_one(file);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(request_id);
+        // buffer.put_one(file);
 
-        self.send(SSH_FXP_REMOVE, buffer.as_ref()).await?;
+        // self.send(SSH_FXP_REMOVE, buffer.as_ref()).await?;
+
+        let buffer = make_buffer! {
+            u8: SSH_FXP_REMOVE,
+            u32: request_id,
+            one: file,
+        };
+
+        self.channel.write_all(buffer).await?;
 
         self.wait_for_status(request_id, Status::no_eof).await
     }
@@ -1158,13 +1416,7 @@ impl SFtp {
         flags: OpenFlags,
         permissions: Option<Permissions>,
     ) -> Result<File> {
-        let mut buffer = Buffer::new();
-
         let request_id = self.genarate_request_id();
-        buffer.put_u32(request_id);
-        buffer.put_one(filename);
-        buffer.put_u32(flags.bits());
-
         let mut flag = 0;
 
         let mut tmp = Buffer::new();
@@ -1172,10 +1424,30 @@ impl SFtp {
             flag |= SSH_FILEXFER_ATTR_PERMISSIONS;
             tmp.put_u32(permissions.bits());
         }
-        buffer.put_u32(flag);
-        buffer.put_bytes(tmp);
 
-        self.send(SSH_FXP_OPEN, buffer.as_ref()).await?;
+        // let mut buffer = Buffer::new();
+
+        // buffer.put_u32(request_id);
+        // buffer.put_one(filename);
+        // buffer.put_u32(flags.bits());
+
+        // buffer.put_u32(flag);
+        // buffer.put_bytes(tmp);
+
+        // self.send(SSH_FXP_OPEN, buffer.as_ref()).await?;
+
+        let openflags = flags.bits();
+        let buffer = make_buffer! {
+            u8: SSH_FXP_OPEN,
+            u32: request_id,
+            one: filename,
+            u32: openflags,
+            u32: flag,
+            bytes: tmp,
+        };
+
+        self.channel.write_all(buffer).await?;
+
         let packet = self.wait_for_packet(request_id).await?;
 
         match packet.msg {
@@ -1197,12 +1469,15 @@ impl SFtp {
     }
 
     async fn recv(&mut self) -> Result<Packet> {
-        let mut data = self.channel.read_exact(4).await?;
+        let data = self.channel.fill(4).await?;
 
         let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
 
-        data.extend(self.channel.read_exact(len as usize).await?);
-        Packet::parse(&data).ok_or(Error::invalid_format("unable to parse sftp packet"))
+        let data = self.channel.fill(4 + len as usize).await?;
+
+        let res = Packet::parse(data).ok_or(Error::invalid_format("unable to parse sftp packet"));
+        self.channel.consume_read_buffer(4 + len as usize);
+        res
     }
 
     fn genarate_request_id(&mut self) -> u32 {
@@ -1210,10 +1485,10 @@ impl SFtp {
         self.request_id
     }
 
-    async fn write(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
-        if !self.channel.write(data.as_ref()).await? {
-            self.channel.flush().await?;
-        }
-        Ok(())
-    }
+    // async fn write(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
+    //     if !self.channel.write(data.as_ref()).await? {
+    //         self.channel.flush().await?;
+    //     }
+    //     Ok(())
+    // }
 }

@@ -3,9 +3,9 @@ use super::error::Result;
 use super::session::{DisconnectReson, Userauth};
 use super::sftp::SFtp;
 use super::ssh::common::code::*;
+use super::OSender;
 use crate::forward::Listener;
 use crate::ssh::buffer::Buffer;
-use super::OSender;
 
 pub(crate) enum Request {
     SessionDrop {

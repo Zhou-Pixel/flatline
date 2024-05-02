@@ -29,13 +29,13 @@ use crate::ssh::{
 use super::channel::{Channel, ExitStatus};
 use super::msg::Message;
 use super::msg::Request;
+use super::{make_buffer_without_header, match_type, put_type};
 use crate::ssh::stream::PlainStream;
 use derive_new::new;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-
-use super::{MSender, MReceiver, MWSender};
 use super::{m_channel, o_channel};
+use super::{MReceiver, MSender, MWSender};
 
 macro_rules! channel_loop {
     ($sel:ident,$id:expr,$($e:pat $(if $c:expr )? => $h:expr,)*) => {
@@ -119,7 +119,7 @@ impl Drop for Session {
         let request = Request::SessionDrop {
             reson: DisconnectReson::BY_APPLICATION,
             desc: "exit".to_string(),
-            sender: None
+            sender: None,
         };
         let _ = self.sender.send(request);
         self.manually_drop()
@@ -203,7 +203,8 @@ impl Session {
     }
 
     pub async fn disconnect_default(self) -> Result<()> {
-        self.disconnect(DisconnectReson::BY_APPLICATION, "exit").await
+        self.disconnect(DisconnectReson::BY_APPLICATION, "exit")
+            .await
     }
 
     pub async fn disconnect(
@@ -215,13 +216,14 @@ impl Session {
         let request = Request::SessionDrop {
             reson,
             desc: desc.into(),
-            sender: Some(sender)
+            sender: Some(sender),
         };
         let res = async {
             self.send_request(request)?;
 
             recver.await?
-        }.await;
+        }
+        .await;
 
         self.manually_drop();
         std::mem::forget(self);
@@ -311,9 +313,7 @@ impl Session {
             sender,
         };
 
-        self.sender
-            .send(request)
-            .map_err(|_| Error::Disconnected)?;
+        self.sender.send(request).map_err(|_| Error::Disconnected)?;
         recver.await?
     }
 
@@ -455,12 +455,18 @@ where
     }
 
     async fn session_disconnect(&mut self, reson: DisconnectReson, desc: &str) -> Result<()> {
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_DISCONNECT);
-        buffer.put_u32(reson.0);
-        buffer.put_one(desc);
-        buffer.put_u32(0);
-        self.stream.send_payload(buffer.as_ref()).await
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_DISCONNECT);
+        // buffer.put_u32(reson.0);
+        // buffer.put_one(desc);
+        // buffer.put_u32(0);
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_DISCONNECT,
+            u32: reson.0,
+            one: desc,
+            u32: 0
+        };
+        self.stream.send_payload(buffer).await
     }
 
     fn genarate_channel_id(&self) -> u32 {
@@ -475,11 +481,16 @@ where
     }
 
     async fn request_userauth_service(&mut self) -> Result<()> {
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_SERVICE_REQUEST);
-        buffer.put_one(b"ssh-userauth");
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_SERVICE_REQUEST);
+        // buffer.put_one(b"ssh-userauth");
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_SERVICE_REQUEST,
+            one: "ssh-userauth",
+        };
+
+        self.stream.send_payload(buffer).await?;
 
         loop {
             let msg = self.recv_msg().await?;
@@ -636,7 +647,7 @@ where
     ) -> Result<()> {
         let listen = (listen_address, listen_port);
 
-        let mut buffer = Buffer::new();
+        let mut buffer = Buffer::with_capacity(128);
         match self.listeners.get(&listen) {
             Some(listener) => {
                 let session = self.upgrade_sender()?;
@@ -649,7 +660,7 @@ where
                 buffer.put_u32(listener.initial);
                 buffer.put_u32(listener.maximum);
 
-                self.stream.send_payload(buffer.as_ref()).await?;
+                self.stream.send_payload(buffer).await?;
 
                 let (tx, rx) = m_channel();
 
@@ -673,7 +684,7 @@ where
                 buffer.put_u32(ChannelOpenFailureReson::UNKNOWN_CHANNELTYPE.0);
                 buffer.put_one("Listener not found");
                 buffer.put_u32(0); // tag
-                self.stream.send_payload(buffer.as_ref()).await?;
+                self.stream.send_payload(buffer).await?;
             }
         }
 
@@ -681,11 +692,16 @@ where
     }
 
     async fn session_pong(&mut self, data: Vec<u8>) -> Result<()> {
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH2_MSG_PONG);
-        buffer.put_one(data);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH2_MSG_PONG);
+        // buffer.put_one(data);
 
-        self.stream.send_payload(buffer.as_ref()).await
+        let buffer = make_buffer_without_header! {
+            u8: SSH2_MSG_PONG,
+            one: data
+        };
+
+        self.stream.send_payload(buffer).await
     }
 
     fn handle_channel_eof(&mut self, id: u32) -> bool {
@@ -726,11 +742,16 @@ where
             // let value = channel.stderr.write(data).await.is_ok();
             if channel.client.size < channel.client.maximum {
                 let count = channel.client.initial - channel.client.size;
-                let mut buffer = Buffer::new();
-                buffer.put_u8(SSH_MSG_CHANNEL_WINDOW_ADJUST);
-                buffer.put_u32(channel.server.id);
-                buffer.put_u32(count);
-                self.stream.send_payload(buffer.as_ref()).await?;
+                // let mut buffer = Buffer::new();
+                // buffer.put_u8(SSH_MSG_CHANNEL_WINDOW_ADJUST);
+                // buffer.put_u32(channel.server.id);
+                // buffer.put_u32(count);
+                let buffer = make_buffer_without_header! {
+                    u8: SSH_MSG_CHANNEL_WINDOW_ADJUST,
+                    u32: channel.server.id,
+                    u32: count,
+                };
+                self.stream.send_payload(buffer).await?;
                 channel.client.size += count;
             }
             Ok(value)
@@ -746,11 +767,18 @@ where
             // let value = channel.stdout.write(data).await.is_ok();
             if channel.client.size < channel.client.maximum {
                 let count = channel.client.initial - channel.client.size;
-                let mut buffer = Buffer::new();
-                buffer.put_u8(SSH_MSG_CHANNEL_WINDOW_ADJUST);
-                buffer.put_u32(channel.server.id);
-                buffer.put_u32(count);
-                self.stream.send_payload(buffer.as_ref()).await?;
+                // let mut buffer = Buffer::new();
+                // buffer.put_u8(SSH_MSG_CHANNEL_WINDOW_ADJUST);
+                // buffer.put_u32(channel.server.id);
+                // buffer.put_u32(count);
+
+                let buffer = make_buffer_without_header! {
+                    u8: SSH_MSG_CHANNEL_WINDOW_ADJUST,
+                    u32: channel.server.id,
+                    u32: count,
+                };
+
+                self.stream.send_payload(buffer).await?;
                 channel.client.size += count;
             }
             Ok(value)
@@ -846,7 +874,11 @@ where
                 let res = self.channel_send_signal(id, &signal.0).await;
                 let _ = sender.send(res);
             }
-            Request::SessionDrop { reson, desc , sender } => {
+            Request::SessionDrop {
+                reson,
+                desc,
+                sender,
+            } => {
                 let res = self.session_disconnect(reson, &desc).await;
                 if let Some(sender) = sender {
                     let _ = sender.send(res);
@@ -914,20 +946,32 @@ where
         local: (String, u32),
     ) -> Result<Channel> {
         let session = self.upgrade_sender()?;
-        let mut buffer = Buffer::new();
+        // let mut buffer = Buffer::new();
 
         let client_id = self.genarate_channel_id();
-        buffer.put_u8(SSH_MSG_CHANNEL_OPEN);
-        buffer.put_one("direct-tcpip");
-        buffer.put_u32(client_id);
-        buffer.put_u32(initial);
-        buffer.put_u32(maximum);
-        buffer.put_one(remote.0);
-        buffer.put_u32(remote.1);
-        buffer.put_one(local.0);
-        buffer.put_u32(local.1);
+        // buffer.put_u8(SSH_MSG_CHANNEL_OPEN);
+        // buffer.put_one("direct-tcpip");
+        // buffer.put_u32(client_id);
+        // buffer.put_u32(initial);
+        // buffer.put_u32(maximum);
+        // buffer.put_one(remote.0);
+        // buffer.put_u32(remote.1);
+        // buffer.put_one(local.0);
+        // buffer.put_u32(local.1);
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_OPEN,
+            one: "direct-tcpip",
+            u32: client_id,
+            u32: initial,
+            u32: maximum,
+            one: remote.0,
+            u32: remote.1,
+            one: local.0,
+            u32: local.1
+        };
+
+        self.stream.send_payload(buffer).await?;
 
         loop {
             let msg = self.recv_msg().await?;
@@ -968,14 +1012,22 @@ where
     }
 
     async fn cancel_tcpip_forward(&mut self, address: &str, port: u32) -> Result<()> {
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_GLOBAL_REQUEST);
-        buffer.put_one("cancel-tcpip-forward");
-        buffer.put_u8(1);
-        buffer.put_one(address);
-        buffer.put_u32(port);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_GLOBAL_REQUEST);
+        // buffer.put_one("cancel-tcpip-forward");
+        // buffer.put_u8(1);
+        // buffer.put_one(address);
+        // buffer.put_u32(port);
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_GLOBAL_REQUEST,
+            one: "cancel-tcpip-forward",
+            u8: 1,
+            one: address,
+            u32: port,
+        };
+
+        self.stream.send_payload(buffer).await?;
 
         loop {
             let packet = self.stream.recv_packet().await?;
@@ -1009,14 +1061,22 @@ where
         maximum: u32,
     ) -> Result<Listener> {
         let session = self.upgrade_sender()?;
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_GLOBAL_REQUEST);
-        buffer.put_one("tcpip-forward");
-        buffer.put_u8(1);
-        buffer.put_one(address);
-        buffer.put_u32(port);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_GLOBAL_REQUEST);
+        // buffer.put_one("tcpip-forward");
+        // buffer.put_u8(1);
+        // buffer.put_one(address);
+        // buffer.put_u32(port);
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_GLOBAL_REQUEST,
+            one: "tcpip-forward",
+            u8: 1,
+            one: address,
+            u32: port,
+        };
+
+        self.stream.send_payload(buffer).await?;
 
         loop {
             let packet = self.stream.recv_packet().await?;
@@ -1052,14 +1112,21 @@ where
     }
 
     async fn channel_request_shell(&mut self, id: u32) -> Result<()> {
-        let mut buffer = Buffer::new();
+        // let mut buffer = Buffer::new();
 
-        buffer.put_u8(SSH_MSG_CHANNEL_REQUEST);
-        buffer.put_u32(id);
-        buffer.put_one("shell");
-        buffer.put_u8(1);
+        // buffer.put_u8(SSH_MSG_CHANNEL_REQUEST);
+        // buffer.put_u32(id);
+        // buffer.put_one("shell");
+        // buffer.put_u8(1);
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_REQUEST,
+            u32: id,
+            one: "shell",
+            u8: 1,
+        };
+
+        self.stream.send_payload(buffer).await?;
 
         channel_loop!(
             self,
@@ -1072,44 +1139,46 @@ where
     }
 
     async fn channel_send_signal(&mut self, id: u32, signal: &str) -> Result<()> {
-        let mut buffer = Buffer::new();
+        // let mut buffer = Buffer::new();
 
         let server_id = self.get_server_channel_id(id)?;
-        buffer.put_u32(server_id);
-        buffer.put_one("signal");
-        buffer.put_u8(0);
-        buffer.put_one(signal);
+        // buffer.put_u32(server_id);
+        // buffer.put_one("signal");
+        // buffer.put_u8(0);
+        // buffer.put_one(signal);
 
-        self.stream.send_payload(buffer.as_ref()).await
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_REQUEST,
+            u32: server_id,
+            one: "signal",
+            u8: 0,
+            one: signal
+        };
+
+        self.stream.send_payload(buffer).await
     }
 
     async fn channel_set_env(&mut self, id: u32, name: &str, value: &[u8]) -> Result<()> {
-        let mut buffer = Buffer::new();
-
         let server_id = self.get_server_channel_id(id)?;
-        buffer.put_u32(server_id);
+        // let mut buffer = Buffer::new();
 
-        buffer.put_one("env");
-        buffer.put_u8(1);
-        buffer.put_one(name);
-        buffer.put_one(value);
+        // buffer.put_u32(server_id);
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        // buffer.put_one("env");
+        // buffer.put_u8(1);
+        // buffer.put_one(name);
+        // buffer.put_one(value);
 
-        // loop {
-        //     let msg = self.recv_msg().await?;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_REQUEST,
+            u32: server_id,
+            one: "env",
+            u8: 1,
+            one: name,
+            one: value,
+        };
 
-        //     return match msg {
-        //         ServerMessage::ChannelSuccess(recipient) if recipient == id => Ok(()),
-        //         ServerMessage::ChannelFailure(recipient) if recipient == id => {
-        //             Err(Error::ChannelFailure)
-        //         }
-        //         msg => {
-        //             self.handle_msg(msg).await?;
-        //             continue;
-        //         }
-        //     };
-        // }
+        self.stream.send_payload(buffer).await?;
 
         channel_loop!(
             self,
@@ -1120,208 +1189,6 @@ where
             },
         );
     }
-
-    // async fn wait_for_finish(&mut self, id: u32) -> Result<ExitStatus> {
-    //     let channel = self
-    //         .channels
-    //         .get_mut(&id)
-    //         .ok_or(Error::ub("Failed to find channel"))?;
-
-    //     if let Some(ref exit_status) = channel.exit_status {
-    //         return Ok(exit_status.clone());
-    //     }
-
-    //     let status = channel_loop!(
-    //         self,
-    //         id,
-    //         Message::ChannelExitStatus { recipient, status } if id == recipient => {
-    //             break ExitStatus::Normal(status);
-    //         },
-    //         Message::ChannelExitSignal {
-    //             recipient,
-    //             signal,
-    //             core_dumped,
-    //             error_msg,
-    //             tag,
-    //         } if recipient == id => {
-    //             break ExitStatus::Interrupt {
-    //                 signal,
-    //                 core_dumped,
-    //                 error_msg,
-    //                 tag
-    //             };
-    //         },
-    //     );
-
-    //     let channel = self
-    //         .channels
-    //         .get_mut(&id)
-    //         .ok_or(Error::ub("Failed to find channel"))?;
-
-    //     channel.exit_status = Some(status.clone());
-
-    //     Ok(status)
-    // }
-
-    // async fn channel_exec_wait(&mut self, id: u32, cmd: &str) -> Result<ExitStatus> {
-    //     self.channel_exec(id, cmd).await?;
-
-    //     let status = channel_loop!(
-    //         self,
-    //         id,
-    //         Message::ChannelExitStatus { recipient, status } if id == recipient => {
-    //             break ExitStatus::Normal(status);
-    //         },
-    //         Message::ChannelExitSignal {
-    //             recipient,
-    //             signal,
-    //             core_dumped,
-    //             error_msg,
-    //             tag
-    //         } if recipient == id => {
-    //             break ExitStatus::Interrupt {
-    //                 signal,
-    //                 core_dumped,
-    //                 error_msg,
-    //                 tag
-    //             };
-    //         },
-    //     );
-
-    //     let channel = self
-    //         .channels
-    //         .get_mut(&id)
-    //         .ok_or(Error::ub("Failed to find channel"))?;
-
-    //     channel.exit_status = Some(status.clone());
-
-    //     Ok(status)
-    // }
-
-    // async fn channel_flush_stdout_blocking(&mut self, id: u32) -> Result<()> {
-    //     let channel = self
-    //         .channels
-    //         .get_mut(&id)
-    //         .ok_or(Error::ub("Failed to find channel"))?;
-
-    //     if channel.client.closed || channel.server.closed {
-    //         return Err(Error::ChannelClosed);
-    //     }
-
-    //     if channel.client.eof {
-    //         return Err(Error::ChannelEOF);
-    //     }
-
-    //     let mut msgs = VecDeque::new();
-
-    //     while !channel.stdout_buf.is_empty() {
-    //         while channel.server.size == 0 {
-    //             let msg = {
-    //                 let packet = self.stream.recv_packet().await?;
-    //                 Message::parse(&packet.payload).map_err(Error::invalid_format)?
-    //             };
-
-    //             match msg {
-    //                 Message::ChannelWindowAdjust { recipient, count } if id == recipient => {
-    //                     channel.server.size += count;
-    //                 }
-    //                 Message::ChannelClose(recipient) if recipient == id => {
-    //                     channel.server_close().await;
-    //                     std::mem::take(&mut channel.stdout_buf);
-    //                     if !channel.client.closed {
-    //                         if !channel.client.eof {
-    //                             let mut buffer = Buffer::new();
-    //                             buffer.put_u8(SSH_MSG_CHANNEL_EOF);
-    //                             buffer.put_u32(channel.server.id);
-    //                             self.stream.send_payload(buffer.as_ref()).await?;
-    //                             channel.client.eof = true;
-    //                         }
-    //                         let mut buffer = Buffer::new();
-    //                         buffer.put_u8(SSH_MSG_CHANNEL_CLOSE);
-    //                         buffer.put_u32(channel.server.id);
-
-    //                         self.stream.send_payload(buffer.as_ref()).await?;
-
-    //                         channel.client.closed = true;
-    //                     }
-    //                     return Err(Error::ChannelClosed);
-    //                 }
-    //                 Message::ChannelEof(recipient) if recipient == id => {
-    //                     channel.server_eof().await;
-    //                 }
-    //                 Message::Disconnect {
-    //                     reason,
-    //                     description,
-    //                     tag,
-    //                 } => {
-    //                     if let Some(ref mut behavior) = self.behaivor {
-    //                         behavior.disconnect(reason, &description, &tag).await?;
-    //                     }
-    //                     return Err(Error::Disconnected);
-    //                 }
-    //                 msg => {
-    //                     msgs.push_back(msg);
-    //                 } // msg => self.handle_msg(msg).await?,
-    //             }
-    //         }
-
-    //         let mut buffer = Buffer::new();
-
-    //         buffer.put_u8(SSH_MSG_CHANNEL_DATA);
-
-    //         buffer.put_u32(channel.server.id);
-
-    //         let len = min(channel.server.maximum, channel.server.size) as usize;
-    //         let len = min(channel.stdout_buf.len(), len);
-    //         let len = min(len, PAYLOAD_MAXIMUM_SIZE - 100);
-
-    //         buffer.put_one(&channel.stdout_buf[..len]);
-
-    //         self.stream.send_payload(buffer.as_ref()).await?;
-    //         channel.stdout_buf.drain(..len);
-    //         channel.server.size -= len as u32;
-    //     }
-
-    //     while let Some(msg) = msgs.pop_front() {
-    //         self.handle_msg(msg).await?;
-    //     }
-    //     Ok(())
-    // }
-
-    // async fn channel_flush_stdout(&mut self, id: u32) -> Result<bool> {
-    //     let channel = self
-    //         .channels
-    //         .get_mut(&id)
-    //         .ok_or(Error::ub("Failed to find channel"))?;
-
-    //     if channel.client.closed || channel.server.closed {
-    //         return Err(Error::ChannelClosed);
-    //     }
-
-    //     if channel.client.eof {
-    //         return Ok(channel.stdout_buf.is_empty());
-    //     }
-
-    //     while !channel.stdout_buf.is_empty() && channel.server.size != 0 {
-    //         let mut buffer = Buffer::new();
-
-    //         buffer.put_u8(SSH_MSG_CHANNEL_DATA);
-
-    //         buffer.put_u32(channel.server.id);
-
-    //         let len = min(channel.server.maximum, channel.server.size) as usize;
-    //         let len = min(len, PAYLOAD_MAXIMUM_SIZE - 200);
-    //         let len = min(channel.stdout_buf.len(), len);
-
-    //         buffer.put_one(&channel.stdout_buf[..len]);
-
-    //         self.stream.send_payload(buffer.as_ref()).await?;
-    //         channel.stdout_buf.drain(..len);
-    //         channel.server.size -= len as u32;
-    //     }
-
-    //     Ok(channel.stdout_buf.is_empty())
-    // }
 
     async fn channel_write_stdout(&mut self, id: u32, data: &[u8]) -> Result<usize> {
         // let (channel, stream) = func(self)?;
@@ -1348,9 +1215,8 @@ where
         let total = data.len();
         let mut pos = 0;
 
+        let mut buffer = Buffer::with_capacity(1024);
         while channel.server.size > 0 && pos < total {
-            let mut buffer = Buffer::new();
-
             buffer.put_u8(SSH_MSG_CHANNEL_DATA);
 
             buffer.put_u32(channel.server.id);
@@ -1363,6 +1229,7 @@ where
             self.stream.send_payload(buffer.as_ref()).await?;
             channel.server.size -= len as u32;
             pos += len;
+            buffer.clear();
         }
 
         Ok(pos)
@@ -1377,18 +1244,29 @@ where
                 // if !channel.server.closed {
                 //     self.channel_flush_stdout_blocking(id).await?;
                 // }
-                let mut buffer = Buffer::new();
-                buffer.put_u8(SSH_MSG_CHANNEL_EOF);
-                buffer.put_u32(channel.server.id);
-                self.stream.send_payload(buffer.as_ref()).await?;
+                // let mut buffer = Buffer::new();
+                // buffer.put_u8(SSH_MSG_CHANNEL_EOF);
+                // buffer.put_u32(channel.server.id);
+
+                let buffer = make_buffer_without_header! {
+                    u8: SSH_MSG_CHANNEL_EOF,
+                    u32: channel.server.id
+                };
+
+                self.stream.send_payload(buffer).await?;
                 channel.client.eof = true;
             }
 
-            let mut buffer = Buffer::new();
-            buffer.put_u8(SSH_MSG_CHANNEL_CLOSE);
-            buffer.put_u32(channel.server.id);
+            // let mut buffer = Buffer::new();
+            // buffer.put_u8(SSH_MSG_CHANNEL_CLOSE);
+            // buffer.put_u32(channel.server.id);
 
-            self.stream.send_payload(buffer.as_ref()).await?;
+            let buffer = make_buffer_without_header! {
+                u8: SSH_MSG_CHANNEL_CLOSE,
+                u32: channel.server.id
+            };
+
+            self.stream.send_payload(buffer).await?;
             channel.client.closed = true;
         }
 
@@ -1413,15 +1291,20 @@ where
             return Ok(());
         }
 
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_CHANNEL_EOF);
-        buffer.put_u32(channel.server.id);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_CHANNEL_EOF);
+        // buffer.put_u32(channel.server.id);
+
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_EOF,
+            u32: channel.server.id,
+        };
 
         // if !channel.server.closed {
         //     self.channel_flush_stdout_blocking(id).await?;
         // }
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        self.stream.send_payload(buffer).await?;
 
         channel.client.eof = true;
         Ok(())
@@ -1440,17 +1323,25 @@ where
 
         if !channel.client.closed {
             if !channel.client.eof {
-                let mut buffer = Buffer::new();
-                buffer.put_u8(SSH_MSG_CHANNEL_EOF);
-                buffer.put_u32(channel.server.id);
-                self.stream.send_payload(buffer.as_ref()).await?;
+                // let mut buffer = Buffer::new();
+                // buffer.put_u8(SSH_MSG_CHANNEL_EOF);
+                // buffer.put_u32(channel.server.id);
+                let buffer = make_buffer_without_header! {
+                    u8: SSH_MSG_CHANNEL_EOF,
+                    u32: channel.server.id,
+                };
+                self.stream.send_payload(buffer).await?;
                 channel.client.eof = true;
             }
-            let mut buffer = Buffer::new();
-            buffer.put_u8(SSH_MSG_CHANNEL_CLOSE);
-            buffer.put_u32(channel.server.id);
+            // let mut buffer = Buffer::new();
+            // buffer.put_u8(SSH_MSG_CHANNEL_CLOSE);
+            // buffer.put_u32(channel.server.id);
+            let buffer = make_buffer_without_header! {
+                u8: SSH_MSG_CHANNEL_CLOSE,
+                u32: channel.server.id
+            };
 
-            self.stream.send_payload(buffer.as_ref()).await?;
+            self.stream.send_payload(buffer).await?;
 
             channel.client.closed = true;
             // do not remove, because we need to wait for the channel to be dropped or called close() by user
@@ -1479,14 +1370,22 @@ where
     }
 
     async fn channel_exec(&mut self, id: u32, cmd: &str) -> Result<()> {
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_CHANNEL_REQUEST);
-        buffer.put_u32(self.get_server_channel_id(id)?);
-        buffer.put_one(b"exec");
-        buffer.put_u8(1);
-        buffer.put_one(cmd.as_bytes());
+        let server_id = self.get_server_channel_id(id)?;
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_CHANNEL_REQUEST);
+        // buffer.put_u32(self.get_server_channel_id(id)?);
+        // buffer.put_one(b"exec");
+        // buffer.put_u8(1);
+        // buffer.put_one(cmd.as_bytes());
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_REQUEST,
+            u32: server_id,
+            one: "exec",
+            u8: 1,
+            one: cmd,
+        };
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        self.stream.send_payload(buffer).await?;
 
         channel_loop!(
             self,
@@ -1503,15 +1402,22 @@ where
         initial: u32,
         maximum: u32,
     ) -> Result<(ChannelEndpoint, ChannelEndpoint)> {
-        let mut buffer = Buffer::new();
         let client_id = self.genarate_channel_id();
-        buffer.put_u8(SSH_MSG_CHANNEL_OPEN);
-        buffer.put_one(b"session");
-        buffer.put_u32(client_id);
-        buffer.put_u32(initial);
-        buffer.put_u32(maximum);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_CHANNEL_OPEN);
+        // buffer.put_one(b"session");
+        // buffer.put_u32(client_id);
+        // buffer.put_u32(initial);
+        // buffer.put_u32(maximum);
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_OPEN,
+            one: "session",
+            u32: client_id,
+            u32: initial,
+            u32: maximum
+        };
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        self.stream.send_payload(buffer).await?;
 
         loop {
             let msg = self.recv_msg().await?;
@@ -1587,11 +1493,18 @@ where
     }
 
     async fn userauth_none(&mut self, username: &str) -> Result<Userauth> {
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
-        buffer.put_one(username);
-        buffer.put_one(b"ssh-connection");
-        buffer.put_one(b"none");
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
+        // buffer.put_one(username);
+        // buffer.put_one(b"ssh-connection");
+        // buffer.put_one(b"none");
+
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_USERAUTH_REQUEST,
+            one: username,
+            one: "ssh-connection",
+            one: "none",
+        };
 
         self.stream.send_payload(buffer.as_ref()).await?;
 
@@ -1615,15 +1528,24 @@ where
     }
 
     async fn userauth_password(&mut self, username: &str, password: &str) -> Result<Userauth> {
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
-        buffer.put_one(username);
-        buffer.put_one(b"ssh-connection");
-        buffer.put_one(b"password");
-        buffer.put_u8(0);
-        buffer.put_one(password);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
+        // buffer.put_one(username);
+        // buffer.put_one(b"ssh-connection");
+        // buffer.put_one(b"password");
+        // buffer.put_u8(0);
+        // buffer.put_one(password);
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_USERAUTH_REQUEST,
+            one: username,
+            one: "ssh-connection",
+            one: "password",
+            u8: 0,
+            one: password,
+        };
+
+        self.stream.send_payload(buffer).await?;
 
         loop {
             return match self.recv_msg().await? {
