@@ -2,14 +2,20 @@ use std::cell::Cell;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::io;
+use std::mem::transmute;
+use std::pin::Pin;
+use std::task::{ready, Context, Poll};
 
 use derive_new::new;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::channel::{Channel, Stream};
+use crate::channel::{Channel, Stream as ChannelStream};
 use crate::error::Result;
 use crate::msg::Request;
 use crate::ssh::common::*;
 use crate::ssh::stream::BufferStream;
+use crate::BoxFuture;
 use crate::{
     error::Error,
     ssh::{buffer::Buffer, common::code::*},
@@ -22,7 +28,7 @@ use super::{make_buffer, match_type, put_type};
 
 bitflags! {
     // https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-01#section-7.3
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct OpenFlags: u32 {
         // Open the file for reading
         const READ                        = SSH_FXF_READ;
@@ -82,8 +88,133 @@ impl Statvfs {
     }
 }
 
+pub struct Stream<'a> {
+    sftp: &'a mut SFtp,
+    file: &'a mut File,
+    read_future: Option<BoxFuture<'a, Result<Vec<u8>>>>,
+    write_future: Option<BoxFuture<'a, Result<()>>>,
+}
+
+impl<'a> Stream<'a> {
+    fn poll_read_no_pin(
+        &'a mut self,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self;
+        if this.read_future.is_none() {
+            let read: BoxFuture<'_, _> = Box::pin(this.sftp.read_file(
+                &mut this.file,
+                if buf.remaining() > u32::MAX as usize {
+                    u32::MAX
+                } else {
+                    buf.remaining() as u32
+                },
+            ));
+            this.read_future = Some(read);
+        }
+
+        let f = this.read_future.as_mut().unwrap().as_mut();
+
+        let res = ready!(f.poll(cx));
+        this.read_future = None;
+        match res {
+            Ok(data) => {
+                if data.len() > buf.remaining() {
+                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "data too long")));
+                }
+                buf.put_slice(&data);
+                Poll::Ready(Ok(()))
+            }
+            Err(err) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, Box::new(err)))),
+        }
+    }
+
+    fn poll_write_no_pin(
+        &'a mut self,
+        cx: &mut Context<'_>,
+        buf: &'a [u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.write_future.is_none() {
+            let future: BoxFuture<_> = Box::pin(async {
+                let buf = buf.to_vec();
+                self.sftp.write_file(&mut self.file, &buf).await
+            });
+
+            self.write_future = Some(future);
+        }
+        let res = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
+        match res {
+            Ok(_) => Poll::Ready(Ok(buf.len())),
+            Err(err) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, Box::new(err)))),
+        }
+    }
+}
+
+impl<'a> AsyncWrite for Stream<'a> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this: &mut Stream<'a> = unsafe { transmute(Pin::into_inner(self)) };
+
+        let buf = unsafe { transmute(buf) };
+
+        this.poll_write_no_pin(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<'a> AsyncRead for Stream<'a> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this: &mut Stream<'a> = unsafe { transmute(Pin::into_inner(self)) };
+        this.poll_read_no_pin(cx, buf)
+        // let this = Pin::into_inner(self);
+        // let this = &mut *this;
+        // if this.read_future.is_none() {
+        //     let read: BoxFuture<'_, _> = Box::pin(this.sftp.read_file(
+        //         &mut this.file,
+        //         if buf.remaining() > u32::MAX as usize {
+        //             u32::MAX
+        //         } else {
+        //             buf.remaining() as u32
+        //         },
+        //     ));
+        //     // this.read_future = unsafe { transmute(Some(read)) };
+        //     this.read_future = Some(read);
+        // }
+
+        // let f = this.read_future.as_mut().unwrap().as_mut();
+
+        // let res = ready!(f.poll(cx));
+        // this.read_future = None;
+        // match res {
+        //     Ok(data) => {
+        //         if data.len() > buf.remaining() {
+        //             return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "data too long")));
+        //         }
+        //         buf.put_slice(&data);
+        //         Poll::Ready(Ok(()))
+        //     }
+        //     Err(err) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, Box::new(err)))),
+        // }
+    }
+}
+
 pub struct SFtp {
-    channel: BufferStream<Stream>,
+    channel: BufferStream<ChannelStream>,
     request_id: u32,
     version: u32,
     ext: HashMap<String, Vec<u8>>,
@@ -92,7 +223,7 @@ pub struct SFtp {
 impl SFtp {
     pub(crate) fn new(channel: Channel, version: u32, ext: HashMap<String, Vec<u8>>) -> Self {
         Self {
-            channel: BufferStream::new(Stream::new(channel)),
+            channel: BufferStream::new(ChannelStream::new(channel)),
             request_id: 0,
             version,
             ext,
@@ -122,7 +253,7 @@ impl Dir {
 }
 
 bitflags! {
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Permissions: u32 {
         const OTHER_EXEC                        = 1 << 0;
         const OTHER_WRITE                       = 1 << 1;
@@ -250,7 +381,7 @@ impl Attributes {
                 let (_, key) = buffer.take_one()?;
                 let (_, value) = buffer.take_one()?;
 
-                extend.insert(String::from_utf8(key.to_vec()).ok()?, value.to_vec());
+                extend.insert(std::str::from_utf8(key).ok()?.to_string(), value.to_vec());
             }
         }
 
@@ -286,6 +417,7 @@ impl Limits {
     }
 }
 
+#[derive(custom_debug_derive::Debug)]
 struct Packet {
     id: u32,
     msg: Message,
@@ -446,6 +578,7 @@ impl Status {
     }
 }
 
+#[derive(custom_debug_derive::Debug)]
 enum Message {
     FileHandle(Vec<u8>),
     Status {
@@ -453,11 +586,15 @@ enum Message {
         msg: String,
         _tag: String,
     },
-    Data(Vec<u8>),
+    Data(#[debug(skip)] Vec<u8>),
     Name(Vec<FileInfo>),
     Attributes(Attributes),
-    ExtendReply(Vec<u8>),
+    ExtendReply(#[debug(skip)] Vec<u8>),
 }
+
+// struct Stream<'a> {
+//     sftp: &'a mut SFtp,
+// }
 
 impl SFtp {
     const MAX_SFTP_PACKET: usize = 32000;
@@ -872,14 +1009,14 @@ impl SFtp {
 
         match packet.msg {
             Message::ExtendReply(data) => {
-                let mut buffer = Buffer::from_vec(data);
+                let buffer = Buffer::from_slice(&data);
                 let usernames = buffer
                     .take_one()
                     .ok_or(Error::ProtocolError(
                         "Invalid sftp packet format".to_string(),
                     ))?
                     .1;
-                let mut usernames = Buffer::from_vec(usernames);
+                let usernames = Buffer::from_slice(usernames);
 
                 let groupnames = buffer
                     .take_one()
@@ -887,17 +1024,19 @@ impl SFtp {
                         "Invalid sftp packet format".to_string(),
                     ))?
                     .1;
-                let mut groupnames = Buffer::from_vec(groupnames);
+                let groupnames = Buffer::from_slice(groupnames);
 
                 let mut unames = vec![];
                 while let Some(user) = usernames.take_one() {
-                    unames.push(String::from_utf8(user.1).map_err(|e| e.utf8_error())?);
+                    // unames.push(String::from_utf8(user.1).map_err(|e| e.utf8_error())?);
+                    unames.push(std::str::from_utf8(user.1)?.to_string())
                 }
 
                 let mut gnames = vec![];
 
                 while let Some(group) = groupnames.take_one() {
-                    gnames.push(String::from_utf8(group.1).map_err(|e| e.utf8_error())?)
+                    // gnames.push(String::from_utf8(group.1).map_err(|e| e.utf8_error())?)
+                    gnames.push(std::str::from_utf8(group.1)?.to_string());
                 }
 
                 Ok((unames, gnames))
@@ -946,6 +1085,69 @@ impl SFtp {
         self.channel.write_all(buffer).await?;
 
         self.wait_for_status(request_id, Status::no_eof).await
+    }
+
+    pub async fn read_file_buf(&mut self, file: &mut File, max: u32) -> Result<Vec<Vec<u8>>> {
+        let base = 255 * 1024;
+
+        let mut times = max / base;
+        if times == 0 {
+            times = 1;
+        }
+
+        let mut requests = Vec::with_capacity(times as usize);
+
+        let mut datas = Vec::with_capacity(times as usize);
+
+        let mut all =
+            Vec::with_capacity(times as usize * (4 + 1 + 4 + 4 + file.handle.len() + 8 + 4));
+
+        let mut pos = file.pos;
+        for _ in 0..times {
+            let request_id = self.genarate_request_id();
+
+            let buffer = make_buffer! {
+                u8: SSH_FXP_READ,
+                u32: request_id,
+                one: &file.handle,
+                u64: pos,
+                u32: base
+            };
+
+            all.extend(buffer.into_vec());
+
+            requests.push(request_id);
+
+            pos += base as u64;
+        }
+        // let first = std::time::Instant::now();
+        self.channel.write_all(all).await?;
+
+        // println!("spent1: {}", first.elapsed().as_millis());
+        // let mut first = std::time::Instant::now();
+
+        for i in requests {
+            let packet = self.wait_for_packet(i).await?;
+            // println!("spent2: {}", first.elapsed().as_millis());
+            // first = std::time::Instant::now();
+
+            match packet.msg {
+                Message::Data(data) => {
+                    file.pos += data.len() as u64;
+                    datas.push(data);
+                }
+                Message::Status {
+                    status: Status::Eof,
+                    ..
+                } => {
+                    datas.push(vec![]);
+                }
+                Message::Status { status, msg, .. } => return status.no_ok(msg),
+                _ => return Err(Error::ProtocolError("Unknown msg".to_string())),
+            }
+        }
+
+        Ok(datas)
     }
 
     pub async fn read_file(&mut self, file: &mut File, max: u32) -> Result<Vec<u8>> {
@@ -1458,13 +1660,22 @@ impl SFtp {
         }
     }
 
+    pub fn file_streamer<'a>(&'a mut self, file: &'a mut File) -> Stream<'a> {
+        Stream {
+            sftp: self,
+            file,
+            read_future: None,
+            write_future: None,
+        }
+    }
+
     async fn wait_for_packet(&mut self, id: u32) -> Result<Packet> {
         loop {
             let packet = self.recv().await?;
             if packet.id == id {
                 return Ok(packet);
             }
-            println!("ignore packet: {}", packet.id)
+            println!("ignore packet: {:?}", packet);
         }
     }
 

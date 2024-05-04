@@ -231,7 +231,7 @@ impl Receiver {
 
         let response = channel.read_line_lf().await?;
 
-        if !response.starts_with(b"C") || response.len() < 8 {
+        if response.len() < 8 || response[0] != b'C' {
             return Err(Error::scp_error(
                 None,
                 String::from_utf8(response).map_err(|e| e.utf8_error())?,

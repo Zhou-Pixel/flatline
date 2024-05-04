@@ -75,7 +75,7 @@ impl Ed25519 {
 
 impl Signature for Ed25519 {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let mut key = Buffer::from_vec(key.to_vec());
+        let key = Buffer::from_slice(key);
 
         // let invalid_format_key = || Error::invalid_format("invalid key format");
 
@@ -118,7 +118,7 @@ pub trait Verify {
 
 impl Verify for Ed25519 {
     fn verify(&mut self, signature: &[u8], data: &[u8]) -> Result<bool> {
-        let mut signature = Buffer::from_vec(signature.to_vec());
+        let signature = Buffer::from_slice(signature);
         let Some((_, keytype)) = signature.take_one() else {
             return Err(Error::invalid_format("invalid signature format"));
         };
@@ -137,7 +137,7 @@ impl Verify for Ed25519 {
     }
 
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let mut key = Buffer::from_vec(key.to_vec());
+        let key = Buffer::from_slice(key);
         let (_, keytype) = key
             .take_one()
             .ok_or(Error::invalid_format("invalid ed25519 key"))?;
@@ -208,7 +208,7 @@ impl<T> Rsa<T> {
 
 impl Verify for Rsa<Public> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let mut buffer = Buffer::from_vec(key.to_vec());
+        let buffer = Buffer::from_slice(key);
 
         let (_, keytype) = buffer.take_one().ok_or(Error::ub("invalid key"))?;
         if keytype != b"ssh-rsa" {
@@ -243,7 +243,7 @@ impl Verify for Rsa<Public> {
         let hash = self.calculate_hash(data)?;
         match self.ctx {
             Some(ref mut ctx) => {
-                let mut signature = Buffer::from_vec(signature.to_vec());
+                let signature = Buffer::from_slice(signature);
 
                 let (_, signtype) = signature
                     .take_one()
@@ -270,7 +270,7 @@ impl Verify for Rsa<Public> {
 
 impl Signature for Rsa<Private> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let mut buffer = Buffer::from_vec(key.to_vec());
+        let buffer = Buffer::from_slice(key);
 
         if buffer
             .take_one()
@@ -281,8 +281,8 @@ impl Signature for Rsa<Private> {
             return Err(Error::invalid_format("key type doesn't match"));
         }
 
-        let mut func = || {
-            let mut one = || Some(buffer.take_one()?.1);
+        let func = || {
+            let one = || Some(buffer.take_one()?.1);
 
             let n = one()?;
             let e = one()?;
@@ -356,10 +356,10 @@ impl<T> Dsa<T> {
 
 impl Verify for Dsa<Public> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let mut key = Buffer::from_vec(key.to_vec());
+        let key = Buffer::from_slice(key);
         // let invalid_key_format = || Error::invalid_format("invalid key format");
 
-        let mut take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
+        let take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
 
         if take_one()? != b"ssh-dss" {
             return Err(invalid_key_format());
@@ -385,7 +385,7 @@ impl Verify for Dsa<Public> {
     }
 
     fn verify(&mut self, signature: &[u8], data: &[u8]) -> Result<bool> {
-        let mut signature = Buffer::from_vec(signature.to_vec());
+        let signature = Buffer::from_slice(signature);
 
         let (_, signtype) = signature
             .take_one()
@@ -424,10 +424,10 @@ impl Verify for Dsa<Public> {
 
 impl Signature for Dsa<Private> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let mut key = Buffer::from_vec(key.to_vec());
+        let key = Buffer::from_slice(key);
         // let invalid_key_format = || Error::invalid_format("invalid key format");
 
-        let mut take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
+        let take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
 
         if take_one()? != b"ssh-dss" {
             return Err(invalid_key_format());
@@ -527,7 +527,7 @@ impl<T> Ecdsa<T> {
 
 impl Signature for Ecdsa<Private> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let mut key = Buffer::from_vec(key.to_vec());
+        let key = Buffer::from_slice(key);
 
         let keytype = key.take_one().ok_or_else(invalid_key_format)?.1;
         if keytype != self.name.as_bytes() {
@@ -581,7 +581,7 @@ impl Signature for Ecdsa<Private> {
 
 impl Verify for Ecdsa<Public> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
-        let mut key = Buffer::from_vec(key.to_vec());
+        let key = Buffer::from_slice(key);
 
         let keytype = key.take_one().ok_or_else(invalid_key_format)?.1;
         if self.name.as_bytes() != keytype {
@@ -612,14 +612,14 @@ impl Verify for Ecdsa<Public> {
     }
 
     fn verify(&mut self, signature: &[u8], data: &[u8]) -> Result<bool> {
-        let mut signature = Buffer::from_vec(signature.to_vec());
+        let signature = Buffer::from_slice(signature);
         if signature.take_one().ok_or_else(invalid_key_format)?.1 != self.name.as_bytes() {
             return Err(invalid_key_format());
         }
 
         let signature = signature.take_one().ok_or_else(invalid_key_format)?.1;
 
-        let mut signature = Buffer::from_vec(signature);
+        let signature = Buffer::from_slice(signature);
         let r = signature.take_one().ok_or_else(invalid_key_format)?.1;
         let s = signature.take_one().ok_or_else(invalid_key_format)?.1;
 

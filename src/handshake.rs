@@ -310,12 +310,11 @@ pub(crate) async fn method_exchange<B: Behavior>(
         kex.push(EXT_INFO_CLIENT.to_string());
     }
 
-    let mut buffer = Buffer::new();
-
     let mut randbytes = [0; 16];
 
     rand_bytes(&mut randbytes)?;
 
+    let mut buffer = Buffer::new();
     buffer.put_u8(SSH_MSG_KEXINIT);
     buffer.put_bytes(randbytes);
     buffer.put_one(kex.join(","));
@@ -343,15 +342,15 @@ pub(crate) async fn method_exchange<B: Behavior>(
     }
 
     let parser = || {
-        let mut reply = Buffer::from_vec(reply.payload.clone());
+        let reply = Buffer::from_slice(&reply.payload);
 
         reply.take_u8()?;
 
         reply.take_bytes(16)?;
 
-        let mut get = || {
+        let get = || {
             let (_, methods) = reply.take_one()?;
-            let methods = String::from_utf8(methods).ok()?;
+            let methods = std::str::from_utf8(methods).ok()?;
 
             Some(
                 methods

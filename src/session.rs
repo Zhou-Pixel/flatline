@@ -8,6 +8,7 @@ use super::ssh::stream::CipherStream;
 
 use crate::channel::ChannelInner;
 use crate::channel::Endpoint as ChannelEndpoint;
+use crate::channel::TerminalMode;
 use crate::cipher::kex::Dependency;
 
 use crate::cipher::sign;
@@ -934,8 +935,109 @@ where
             } => {
                 let _ = sender.send(self.direct_tcpip(initial, maximum, remote, local).await);
             }
+            Request::ChannelRequestPty {
+                id,
+                term,
+                columns,
+                rows,
+                width,
+                height,
+                terimal_modes,
+                sender,
+            } => {
+                let res = self
+                    .channel_request_pty(id, &term, columns, rows, width, height, &terimal_modes)
+                    .await;
+                let _ = sender.send(res);
+            }
+            Request::ChannelPtyChangeSize {
+                id,
+                columns,
+                rows,
+                width,
+                height,
+                sender,
+            } => {
+                let res = self
+                    .channel_pty_change_size(id, columns, rows, width, height)
+                    .await;
+
+                let _ = sender.send(res);
+            }
         }
         false
+    }
+
+    async fn channel_pty_change_size(
+        &mut self,
+        id: u32,
+        columns: u32,
+        rows: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let server_id = self.get_server_channel_id(id)?;
+
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_REQUEST,
+            u32: server_id,
+            one: "window-change",
+            u8: 0,
+            u32: columns,
+            u32: rows,
+            u32: width,
+            u32: height
+        };
+
+        self.stream.send_payload(buffer).await
+    }
+
+    async fn channel_request_pty(
+        &mut self,
+        id: u32,
+        term: &str,
+        columns: u32,
+        rows: u32,
+        width: u32,
+        height: u32,
+        terminal_modes: &[(TerminalMode, u32)],
+    ) -> Result<()> {
+        let server_id = self.get_server_channel_id(id)?;
+
+        let mut modes = Buffer::with_capacity(terminal_modes.len() * 5 + 1 + 4);
+
+        modes.put_u32((terminal_modes.len() * 5 + 1) as u32);
+
+        for (md, arg) in terminal_modes {
+            modes.put_u8(*md as u8);
+            modes.put_u32(*arg);
+        }
+
+        modes.put_u8(0);
+
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_REQUEST,
+            u32: server_id,
+            one: "pty-req",
+            u8: 1,
+            one: term,
+            u32: columns,
+            u32: rows,
+            u32: width,
+            u32: height,
+            bytes: modes
+        };
+
+        self.stream.send_payload(buffer).await?;
+
+        channel_loop!(
+            self,
+            id,
+            Message::ChannelSuccess(recipient) if recipient == id => return Ok(()),
+            Message::ChannelFailure(recipient) if recipient == id => {
+                return Err(Error::ChannelFailure);
+            },
+        );
     }
 
     async fn direct_tcpip(
@@ -1031,7 +1133,7 @@ where
 
         loop {
             let packet = self.stream.recv_packet().await?;
-            let mut payload = Buffer::from_vec(packet.payload.clone());
+            let payload = Buffer::from_slice(&packet.payload);
 
             match payload.take_u8() {
                 Some(SSH_MSG_REQUEST_SUCCESS) => {
@@ -1080,7 +1182,7 @@ where
 
         loop {
             let packet = self.stream.recv_packet().await?;
-            let mut payload = Buffer::from_vec(packet.payload.clone());
+            let payload = Buffer::from_slice(&packet.payload);
 
             match payload.take_u8() {
                 Some(SSH_MSG_REQUEST_SUCCESS) => {
@@ -1202,7 +1304,7 @@ where
         }
 
         if channel.client.eof {
-            return Err(Error::ChannelEOF);
+            return Err(Error::ChannelEof);
         }
 
         // channel.stdout_buf.extend(data);
@@ -1588,7 +1690,7 @@ where
 
         loop {
             let packet = self.stream.recv_packet().await?;
-            let mut payload = Buffer::from_vec(packet.payload.clone());
+            let payload = Buffer::from_slice(&packet.payload);
             let code = payload
                 .take_u8()
                 .ok_or(Error::invalid_format("Invalid ssh packet"))?;
@@ -1598,8 +1700,7 @@ where
                         .take_one()
                         .ok_or(Error::invalid_format("Invalid ssh packet"))?;
                     return Ok(Userauth::Failure(
-                        String::from_utf8(methods)
-                            .map_err(|e| e.utf8_error())?
+                        std::str::from_utf8(methods)?
                             .split(',')
                             .map(|v| v.to_string())
                             .collect(),
@@ -1734,15 +1835,15 @@ where
                     break Err(Error::ChannelClosed);
                 }
                 Message::ChannelEof(recipient) if recipient == client_id => {
-                    break Err(Error::ChannelEOF);
+                    break Err(Error::ChannelEof);
                 }
                 Message::ChannelStdoutData { recipient, data } if recipient == client_id => {
-                    let mut data = Buffer::from_vec(data);
+                    let data = Buffer::from_slice(&data);
                     let (_, data) = data
                         .take_one()
                         .ok_or(Error::invalid_format("Invalid ssh packet"))?;
 
-                    let mut data = Buffer::from_vec(data);
+                    let data = Buffer::from_slice(data);
 
                     let value = data
                         .take_u8()
@@ -1758,18 +1859,18 @@ where
                         .take_u32()
                         .ok_or(Error::invalid_format("Invalid ssh packet"))?;
 
-                    let mut ext = || {
+                    let ext = || {
                         let Some((_, key)) = data.take_one() else {
                             return Ok(None);
                         };
 
-                        let key = String::from_utf8(key).map_err(|e| e.utf8_error())?;
+                        let key = std::str::from_utf8(key)?;
 
                         let (_, value) = data
                             .take_one()
                             .ok_or(Error::invalid_format("Failed to parse value"))?;
 
-                        Result::Ok(Some((key, value)))
+                        Result::Ok(Some((key.to_string(), value.to_vec())))
                     };
 
                     let mut extension = HashMap::new();

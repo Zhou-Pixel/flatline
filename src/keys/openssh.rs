@@ -72,7 +72,8 @@ impl super::KeyParser for OpenSSH {
             .trim_start_matches("-----BEGIN OPENSSH PRIVATE KEY-----")
             .trim_end_matches("-----END OPENSSH PRIVATE KEY-----");
 
-        let mut decode = Buffer::from_vec(decode_block(content)?);
+        let decode = decode_block(content)?;
+        let decode = Buffer::from_slice(&decode);
 
         let key = b"openssh-key-v1\0";
 
@@ -107,16 +108,18 @@ impl super::KeyParser for OpenSSH {
             .take_one()
             .ok_or(Error::invalid_format("invalid binary format"))?;
 
-        let public_key = pbuf.clone();
-        let mut pbuf = Buffer::from_vec(pbuf);
+        let public_key = pbuf;
+        let pbuf = Buffer::from_slice(pbuf);
 
         let (_, keytype) = pbuf
             .take_one()
             .ok_or(Error::invalid_format("invalid binary format"))?;
 
-        let (_, mut section) = decode
+        let (_, section) = decode
             .take_one()
             .ok_or(Error::invalid_format("invalid binary format"))?;
+
+        let mut section = section.to_vec();
 
         match passphrase {
             Some(passphrase) => {
@@ -125,7 +128,7 @@ impl super::KeyParser for OpenSSH {
                         // In the current version only bcrtypt is legal
                         return Err(Error::invalid_format("invalid kdfname"));
                     }
-                    let mut kdfopts = Buffer::from_vec(kdfopts);
+                    let kdfopts = Buffer::from_slice(kdfopts);
                     let (_, salt) = kdfopts
                         .take_one()
                         .ok_or(Error::invalid_format("invalid binary format"))?;
@@ -180,7 +183,7 @@ impl super::KeyParser for OpenSSH {
             }
         }
 
-        let mut section = Buffer::from_vec(section);
+        let section = Buffer::from_slice(&section);
 
         let checkint1 = section
             .take_u32()
@@ -238,7 +241,7 @@ impl super::KeyParser for OpenSSH {
 
             (private_key.into_vec(), public_key)
         } else if keytype == b"ssh-rsa" {
-            let mut take_one = || Result::Ok(section.take_one().ok_or_else(invalid_key_format)?.1);
+            let take_one = || Result::Ok(section.take_one().ok_or_else(invalid_key_format)?.1);
 
             if take_one()? != keytype {
                 return Err(invalid_key_format());
@@ -268,7 +271,7 @@ impl super::KeyParser for OpenSSH {
 
             (prikey.into_vec(), public_key)
         } else if keytype == b"ssh-dss" {
-            let mut take_one = || Result::Ok(section.take_one().ok_or_else(invalid_key_format)?.1);
+            let take_one = || Result::Ok(section.take_one().ok_or_else(invalid_key_format)?.1);
 
             if take_one()? != keytype {
                 return Err(invalid_key_format());
@@ -319,18 +322,18 @@ impl super::KeyParser for OpenSSH {
         } else {
             return Err(Error::invalid_format(format!(
                 "unsupport key type => {}",
-                String::from_utf8(keytype).map_err(|e| e.utf8_error())?
+                std::str::from_utf8(keytype)?
             )));
         };
 
         let comment = section.take_one().ok_or_else(invalid_key_format)?.1;
-        let comment = String::from_utf8(comment).map_err(|e| e.utf8_error())?;
+        let comment = std::str::from_utf8(comment)?;
 
         Ok(PrivateKey::new(
-            String::from_utf8(keytype).map_err(|e| e.utf8_error())?,
-            public,
+            std::str::from_utf8(keytype)?.to_string(),
+            public.to_vec(),
             private,
-            comment,
+            comment.to_string(),
         ))
     }
 

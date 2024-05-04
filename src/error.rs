@@ -54,7 +54,7 @@ pub enum Error {
     ChannelClosed,
 
     #[error("Channel end of file")]
-    ChannelEOF,
+    ChannelEof,
 
     #[error("Failed to verify hostkey")]
     HostKeyVerifyFailed,

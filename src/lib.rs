@@ -9,6 +9,7 @@ mod project;
 pub mod scp;
 pub mod session;
 pub mod sftp;
+pub mod x11;
 mod ssh;
 
 #[cfg(test)]
@@ -19,6 +20,7 @@ type MReceiver<T> = mpsc::UnboundedReceiver<T>;
 type OSender<T> = oneshot::Sender<T>;
 type OReceiver<T> = oneshot::Receiver<T>;
 type MWSender<T> = mpsc::WeakUnboundedSender<T>;
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
 
 fn m_channel<T>() -> (MSender<T>, MReceiver<T>) {
     mpsc::unbounded_channel()
@@ -27,6 +29,8 @@ fn m_channel<T>() -> (MSender<T>, MReceiver<T>) {
 fn o_channel<T>() -> (OSender<T>, OReceiver<T>) {
     oneshot::channel()
 }
+
+use std::{future::Future, pin::Pin};
 
 pub use cipher::{
     compress::{Decode, Encode},

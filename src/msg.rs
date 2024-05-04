@@ -4,6 +4,7 @@ use super::session::{DisconnectReson, Userauth};
 use super::sftp::SFtp;
 use super::ssh::common::code::*;
 use super::OSender;
+use crate::channel::TerminalMode;
 use crate::forward::Listener;
 use crate::ssh::buffer::Buffer;
 
@@ -91,12 +92,26 @@ pub(crate) enum Request {
         id: u32,
         sender: OSender<Result<()>>,
     },
-    // ChannelFlushStdout {
-    //     id: u32,
-    //     sender: OSender<Result<()>>,
-    // },
     ChannelReuqestShell {
         id: u32,
+        sender: OSender<Result<()>>,
+    },
+    ChannelRequestPty {
+        id: u32,
+        term: String,
+        columns: u32,
+        rows: u32,
+        width: u32,
+        height: u32,
+        terimal_modes: Vec<(TerminalMode, u32)>,
+        sender: OSender<Result<()>>,
+    },
+    ChannelPtyChangeSize {
+        id: u32,
+        columns: u32,
+        rows: u32,
+        width: u32,
+        height: u32,
         sender: OSender<Result<()>>,
     },
     SFtpFromChannel {
