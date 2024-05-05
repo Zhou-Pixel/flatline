@@ -136,14 +136,14 @@ impl<'a> Stream<'a> {
         buf: &'a [u8],
     ) -> Poll<io::Result<usize>> {
         if self.write_future.is_none() {
-            let future: BoxFuture<_> = Box::pin(async {
-                let buf = buf.to_vec();
-                self.sftp.write_file(&mut self.file, &buf).await
-            });
+            let future: BoxFuture<_> = Box::pin(self.sftp.write_file_buf(self.file, buf));
 
             self.write_future = Some(future);
         }
         let res = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
+
+        self.write_future = None;
+
         match res {
             Ok(_) => Poll::Ready(Ok(buf.len())),
             Err(err) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, Box::new(err)))),
