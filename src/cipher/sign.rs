@@ -85,7 +85,7 @@ impl Signature for Ed25519 {
 
         let key = key.take_one().ok_or_else(invalid_key_format)?.1;
 
-        let pkey = PKey::private_key_from_raw_bytes(&key, Id::ED25519)?;
+        let pkey = PKey::private_key_from_raw_bytes(key, Id::ED25519)?;
 
         let mut ctx = MdCtx::new()?;
         ctx.digest_sign_init(None, &pkey)?;
@@ -131,7 +131,7 @@ impl Verify for Ed25519 {
 
         let res = self
             .get_ctx_mut()?
-            .digest_verify(data, &signature)
+            .digest_verify(data, signature)
             .unwrap_or(false);
         Ok(res)
     }
@@ -150,7 +150,7 @@ impl Verify for Ed25519 {
             .take_one()
             .ok_or(Error::invalid_format("invalid ed25519 key"))?;
 
-        let key = PKey::public_key_from_raw_bytes(&key, Id::ED25519)?;
+        let key = PKey::public_key_from_raw_bytes(key, Id::ED25519)?;
 
         let mut ctx = MdCtx::new()?;
 
@@ -222,8 +222,8 @@ impl Verify for Rsa<Public> {
         // self.e = Some(e);
         // self.n = Some(n);
 
-        let n = BigNum::from_slice(&n)?;
-        let e = BigNum::from_slice(&e)?;
+        let n = BigNum::from_slice(n)?;
+        let e = BigNum::from_slice(e)?;
         let key = rsa::Rsa::from_public_components(n, e)?;
 
         let pkey = PKey::from_rsa(key)?;
@@ -256,7 +256,7 @@ impl Verify for Rsa<Public> {
                     .take_one()
                     .ok_or(Error::invalid_format("invalid signature format"))?;
 
-                Ok(ctx.verify(&hash, &signature).unwrap_or(false))
+                Ok(ctx.verify(&hash, signature).unwrap_or(false))
             }
 
             _ => Err(Error::ub("it must be initilized before verify")),
@@ -296,12 +296,12 @@ impl Signature for Rsa<Private> {
 
         let (n, e, d, iqmp, p, q) = func().ok_or(Error::invalid_format("invalid key format"))?;
 
-        let n = BigNum::from_slice(&n)?;
-        let e = BigNum::from_slice(&e)?;
-        let d = BigNum::from_slice(&d)?;
-        let iqmp = BigNum::from_slice(&iqmp)?;
-        let p = BigNum::from_slice(&p)?;
-        let q = BigNum::from_slice(&q)?;
+        let n = BigNum::from_slice(n)?;
+        let e = BigNum::from_slice(e)?;
+        let d = BigNum::from_slice(d)?;
+        let iqmp = BigNum::from_slice(iqmp)?;
+        let p = BigNum::from_slice(p)?;
+        let q = BigNum::from_slice(q)?;
         let dmp1 = BigNum::new()?;
         let dmq1 = BigNum::new()?;
 
@@ -370,10 +370,10 @@ impl Verify for Dsa<Public> {
         let g = take_one()?;
         let y = take_one()?;
 
-        let p = BigNum::from_slice(&p)?;
-        let q = BigNum::from_slice(&q)?;
-        let g = BigNum::from_slice(&g)?;
-        let y = BigNum::from_slice(&y)?;
+        let p = BigNum::from_slice(p)?;
+        let q = BigNum::from_slice(q)?;
+        let g = BigNum::from_slice(g)?;
+        let y = BigNum::from_slice(y)?;
 
         let key = dsa::Dsa::from_public_components(p, q, g, y)?;
 
@@ -439,11 +439,11 @@ impl Signature for Dsa<Private> {
         let y = take_one()?;
         let x = take_one()?;
 
-        let p = BigNum::from_slice(&p)?;
-        let q = BigNum::from_slice(&q)?;
-        let g = BigNum::from_slice(&g)?;
-        let y = BigNum::from_slice(&y)?;
-        let x = BigNum::from_slice(&x)?;
+        let p = BigNum::from_slice(p)?;
+        let q = BigNum::from_slice(q)?;
+        let g = BigNum::from_slice(g)?;
+        let y = BigNum::from_slice(y)?;
+        let x = BigNum::from_slice(x)?;
 
         let key = dsa::Dsa::from_private_components(p, q, g, x, y)?;
 
@@ -535,7 +535,7 @@ impl Signature for Ecdsa<Private> {
         }
 
         let nid = key.take_one().ok_or_else(invalid_key_format)?.1;
-        if self.name.ends_with(std::str::from_utf8(&nid)?) {
+        if self.name.ends_with(std::str::from_utf8(nid)?) {
             return Err(invalid_key_format());
         }
 
@@ -546,10 +546,10 @@ impl Signature for Ecdsa<Private> {
         let group = eckey.group();
 
         let mut bnctx = BigNumContext::new()?;
-        let point = EcPoint::from_bytes(group, &public_key, &mut bnctx)?;
+        let point = EcPoint::from_bytes(group, public_key, &mut bnctx)?;
         // let point = EcKey::from_public_key(group, &point)?;
 
-        let e = BigNum::from_slice(&e)?;
+        let e = BigNum::from_slice(e)?;
         let private = EcKey::from_private_components(group, &e, &point)?;
 
         let pkey = PKey::from_ec_key(private)?;
@@ -590,7 +590,7 @@ impl Verify for Ecdsa<Public> {
 
         let id = key.take_one().ok_or_else(invalid_key_format)?.1;
 
-        if !self.name.ends_with(std::str::from_utf8(&id)?) {
+        if !self.name.ends_with(std::str::from_utf8(id)?) {
             return Err(invalid_key_format());
         }
 
@@ -600,7 +600,7 @@ impl Verify for Ecdsa<Public> {
         let group = eckey.group();
 
         let mut bnctx = BigNumContext::new()?;
-        let point = EcPoint::from_bytes(group, &public_key, &mut bnctx)?;
+        let point = EcPoint::from_bytes(group, public_key, &mut bnctx)?;
         let point = EcKey::from_public_key(group, &point)?;
 
         point.check_key()?;
@@ -624,7 +624,7 @@ impl Verify for Ecdsa<Public> {
         let s = signature.take_one().ok_or_else(invalid_key_format)?.1;
 
         let ecsig =
-            EcdsaSig::from_private_components(BigNum::from_slice(&r)?, BigNum::from_slice(&s)?)?;
+            EcdsaSig::from_private_components(BigNum::from_slice(r)?, BigNum::from_slice(s)?)?;
 
         let signature = ecsig.to_der()?;
 

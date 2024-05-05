@@ -211,6 +211,7 @@ pub(crate) struct Summary {
     pub methods: Methods,
 }
 
+#[allow(clippy::too_many_arguments)]
 #[derive(new, Debug)]
 pub(crate) struct Methods {
     pub kex: Vec<String>,
@@ -402,6 +403,7 @@ pub(crate) async fn method_exchange<B: Behavior>(
     Ok(MethodExchange::new(client, server))
 }
 
+#[allow(clippy::too_many_arguments)]
 #[derive(new)]
 pub(crate) struct Algorithm {
     pub kex: Box<dyn KeyExChange + Send>,

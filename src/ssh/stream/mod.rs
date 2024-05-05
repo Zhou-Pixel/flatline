@@ -129,6 +129,7 @@ impl<T: AsyncWrite + Unpin> BufferStream<T> {
         self.socket.flush().await
     }
 
+    #[allow(unused)]
     pub async fn write_all(&mut self, data: impl AsRef<[u8]>) -> io::Result<()> {
         self.w_buf.put(data.as_ref());
         while !self.w_buf.is_empty() {

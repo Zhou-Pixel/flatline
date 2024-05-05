@@ -1,7 +1,7 @@
 use super::ssh::common::code::*;
+use bytes::BufMut;
 use bytes::BytesMut;
 use derive_new::new;
-use tokio::sync::mpsc::error::TryRecvError;
 use std::cmp::min;
 use std::io;
 use std::mem::transmute;
@@ -13,11 +13,11 @@ use std::task::Poll;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
+use tokio::sync::mpsc::error::TryRecvError;
 
 use super::error::{Error, Result};
 use super::msg::Request;
-use super::{o_channel, MReceiver, MSender, BoxFuture};
-
+use super::{o_channel, BoxFuture, MReceiver, MSender};
 
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -445,6 +445,112 @@ pub enum TerminalMode {
 //     }
 // }
 
+pub(crate) struct BufferChannel {
+    channel: Channel,
+    stdout: BytesMut,
+    stderr: BytesMut,
+    stdin: BytesMut,
+
+    closed: bool,
+
+    eof: bool,
+}
+
+impl BufferChannel {
+    async fn recv(&mut self) -> Result<()> {
+        if self.closed {
+            return Err(Error::ChannelClosed);
+        }
+        if self.eof {
+            return Err(Error::ChannelEof);
+        }
+        loop {
+            let msg = self.channel.recv().await?;
+            match msg {
+                Message::Close => {
+                    self.closed = true;
+                    return Err(Error::ChannelClosed);
+                }
+                Message::Eof => {
+                    self.eof = true;
+                    return Err(Error::ChannelEof);
+                }
+                Message::Stdout(data) => {
+                    self.stdout.put(data.as_ref());
+                    return Ok(());
+                }
+                Message::Stderr(data) => {
+                    self.stderr.put(data.as_ref());
+                }
+                Message::Exit(_) => continue,
+            }
+        }
+    }
+
+    pub(crate) fn new(channel: Channel) -> Self {
+        let default_size = 8 * 1024;
+        Self {
+            channel,
+            stdout: BytesMut::with_capacity(default_size),
+            stderr: BytesMut::with_capacity(default_size),
+            stdin: BytesMut::with_capacity(default_size),
+            closed: false,
+            eof: false,
+        }
+    }
+
+    pub(crate) fn into_inner(self) -> Channel {
+        self.channel
+    }
+
+    pub(crate) async fn fill(&mut self, len: usize) -> Result<&[u8]> {
+        while self.stdout.len() < len {
+            self.recv().await?;
+        }
+
+        Ok(&self.stdout[..len])
+    }
+
+    pub(crate) fn consume(&mut self, len: usize) {
+        drop(self.stdout.split_to(len));
+    }
+
+    pub(crate) async fn write(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
+        if self.closed {
+            return Err(Error::ChannelClosed);
+        }
+        self.stdin.put(data.as_ref());
+
+        let len = self.channel.write(self.stdin.to_vec()).await?;
+
+        drop(self.stdin.split_to(len));
+        Ok(())
+    }
+
+    pub(crate) async fn write_all(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
+        if self.closed {
+            return Err(Error::ChannelClosed);
+        }
+        self.stdin.put(data.as_ref());
+
+        while !self.stdin.is_empty() {
+            let len = self.channel.write(self.stdin.to_vec()).await?;
+
+            drop(self.stdin.split_to(len));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn flush(&mut self) -> Result<()> {
+        while !self.stdin.is_empty() {
+            let len = self.channel.write(self.stdin.to_vec()).await?;
+
+            drop(self.stdin.split_to(len));
+        }
+        Ok(())
+    }
+}
+
 pub struct Channel {
     pub(crate) id: u32,
     recver: ManuallyDrop<MReceiver<Message>>,
@@ -543,7 +649,7 @@ impl Channel {
         match self.recver.try_recv() {
             Ok(msg) => Ok(Some(msg)),
             Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Err(Error::Disconnected)
+            Err(TryRecvError::Disconnected) => Err(Error::Disconnected),
         }
     }
 

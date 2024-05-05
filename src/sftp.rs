@@ -10,11 +10,10 @@ use std::task::{ready, Context, Poll};
 use derive_new::new;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::channel::{Channel, Stream as ChannelStream};
+use crate::channel::{BufferChannel, Channel};
 use crate::error::Result;
 use crate::msg::Request;
 use crate::ssh::common::*;
-use crate::ssh::stream::BufferStream;
 use crate::BoxFuture;
 use crate::{
     error::Error,
@@ -104,7 +103,7 @@ impl<'a> Stream<'a> {
         let this = self;
         if this.read_future.is_none() {
             let read: BoxFuture<'_, _> = Box::pin(this.sftp.read_file(
-                &mut this.file,
+                this.file,
                 if buf.remaining() > u32::MAX as usize {
                     u32::MAX
                 } else {
@@ -214,7 +213,7 @@ impl<'a> AsyncRead for Stream<'a> {
 }
 
 pub struct SFtp {
-    channel: BufferStream<ChannelStream>,
+    channel: BufferChannel,
     request_id: u32,
     version: u32,
     ext: HashMap<String, Vec<u8>>,
@@ -223,7 +222,7 @@ pub struct SFtp {
 impl SFtp {
     pub(crate) fn new(channel: Channel, version: u32, ext: HashMap<String, Vec<u8>>) -> Self {
         Self {
-            channel: BufferStream::new(ChannelStream::new(channel)),
+            channel: BufferChannel::new(channel),
             request_id: 0,
             version,
             ext,
@@ -1233,12 +1232,16 @@ impl SFtp {
             buffer.put_u64(file.pos);
             buffer.put_one(&data[i..i + min]);
 
-            self.channel.write_all(&buffer).await?;
+            // self.channel.write_all(&buffer).await?;
+
+            self.channel.write(&buffer).await?;
 
             requests.push(request_id);
             file.pos += min as u64;
             buffer.clear();
         }
+
+        self.channel.flush().await?;
 
         for id in requests {
             self.wait_for_status(id, Status::no_eof).await?;
@@ -1687,7 +1690,7 @@ impl SFtp {
         let data = self.channel.fill(4 + len as usize).await?;
 
         let res = Packet::parse(data).ok_or(Error::invalid_format("unable to parse sftp packet"));
-        self.channel.consume_read_buffer(4 + len as usize);
+        self.channel.consume(4 + len as usize);
         res
     }
 

@@ -636,6 +636,7 @@ where
             .ok_or(Error::ub("Session has been dropped"))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn accpet_tcpip_forward(
         &mut self,
         sender: u32,
@@ -992,6 +993,7 @@ where
         self.stream.send_payload(buffer).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn channel_request_pty(
         &mut self,
         id: u32,

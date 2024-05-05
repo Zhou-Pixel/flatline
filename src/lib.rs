@@ -9,8 +9,8 @@ mod project;
 pub mod scp;
 pub mod session;
 pub mod sftp;
-pub mod x11;
 mod ssh;
+pub mod x11;
 
 #[cfg(test)]
 mod test;

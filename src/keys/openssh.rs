@@ -138,14 +138,14 @@ impl super::KeyParser for OpenSSH {
 
                     let mut cipher = self
                         .cipher
-                        .get(std::str::from_utf8(&cipher)?)
+                        .get(std::str::from_utf8(cipher)?)
                         .ok_or(Error::invalid_format("unsupport cipher type"))?
                         .create();
 
                     cipher.enable_increase_iv(false);
 
                     let mut key_and_iv = vec![0; cipher.key_len() + cipher.iv_len()];
-                    bcrypt_pbkdf::bcrypt_pbkdf(passphrase, &salt, rounds, &mut key_and_iv)
+                    bcrypt_pbkdf::bcrypt_pbkdf(passphrase, salt, rounds, &mut key_and_iv)
                         .map_err(|e| Error::invalid_format(e.to_string()))?;
 
                     cipher.initialize(
@@ -166,7 +166,7 @@ impl super::KeyParser for OpenSSH {
                             .take_bytes(cipher.tag_len())
                             .ok_or(Error::invalid_format("invalid binary format"))?;
 
-                        cipher.set_authentication_tag(&tag)?;
+                        cipher.set_authentication_tag(tag)?;
                     }
 
                     cipher.finalize(&mut plain_text)?;
@@ -236,7 +236,7 @@ impl super::KeyParser for OpenSSH {
                 .ok_or(Error::invalid_format("invalid binary format"))?;
 
             let mut private_key = Buffer::new();
-            private_key.put_one(&keytype);
+            private_key.put_one(keytype);
             private_key.put_one(prikey);
 
             (private_key.into_vec(), public_key)
@@ -261,9 +261,9 @@ impl super::KeyParser for OpenSSH {
 
             let mut prikey = Buffer::new();
 
-            prikey.put_one(&keytype);
-            prikey.put_one(&n);
-            prikey.put_one(&e);
+            prikey.put_one(keytype);
+            prikey.put_one(n);
+            prikey.put_one(e);
             prikey.put_one(d);
             prikey.put_one(iqmp);
             prikey.put_one(p);
