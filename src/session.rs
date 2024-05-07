@@ -4,6 +4,7 @@ use std::mem::ManuallyDrop;
 
 use super::channel::ChannelOpenFailureReson;
 use super::handshake;
+use super::keys::openssh::OpenSSH;
 use super::ssh::stream::CipherStream;
 
 use crate::channel::ChannelInner;
@@ -17,6 +18,7 @@ use crate::error::Error;
 use crate::error::Result;
 use crate::forward::Listener;
 use crate::forward::Stream;
+use crate::keys::KeyParser;
 
 use super::channel::Message as ChannelMsg;
 use crate::handshake::Behavior;
@@ -276,6 +278,39 @@ impl Session {
         self.send_request(requset)?;
 
         recver.await?
+    }
+
+    pub async fn userauth_publickey_from_file(
+        &self,
+        username: impl Into<String>,
+        privatekey: impl AsRef<[u8]>,
+        publickey: Option<&[u8]>,
+        passphrase: Option<&[u8]>,
+    ) -> Result<Userauth> {
+        let openssh = OpenSSH::default();
+
+        let mut private = openssh.parse_privatekey(privatekey.as_ref(), passphrase)?;
+
+        if let Some(pb) = publickey {
+            let public = openssh.parse_publickey(pb)?;
+
+            if public.key_type != private.key_type {
+                return Err(Error::invalid_format("Cipher doest't match"));
+            }
+            if public.key != private.public_key {
+                return Err(Error::invalid_format("Public key does't match"));
+            }
+        }
+        if private.key_type == "ssh-rsa" {
+            private.key_type = "rsa-sha2-256".to_string();
+        }
+        self.userauth_publickey(
+            username,
+            private.key_type,
+            private.public_key,
+            private.private_key,
+        )
+        .await
     }
 
     pub async fn userauth_publickey(
@@ -1677,18 +1712,26 @@ where
         publickey: &[u8],
         privatekey: &[u8],
     ) -> Result<Userauth> {
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
-        buffer.put_one(username);
-        buffer.put_one(b"ssh-connection");
-        buffer.put_one("publickey");
-        buffer.put_u8(0);
-        buffer.put_one(method);
-        // buffer.put_u32((4 + method.len() + 4 + publickey.len()) as u32);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
+        // buffer.put_one(username);
+        // buffer.put_one(b"ssh-connection");
+        // buffer.put_one("publickey");
+        // buffer.put_u8(0);
         // buffer.put_one(method);
-        buffer.put_one(publickey);
+        // buffer.put_one(publickey);
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_USERAUTH_REQUEST,
+            one: username,
+            one: b"ssh-connection",
+            one: b"publickey",
+            u8: 0,
+            one: method,
+            one: publickey,
+        };
+
+        self.stream.send_payload(buffer).await?;
 
         loop {
             let packet = self.stream.recv_packet().await?;
@@ -1723,42 +1766,66 @@ where
             }
         }
 
-        let mut buffer = Buffer::new();
-        buffer.put_one(&self.session_id);
-        buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
-        buffer.put_one(username);
-        buffer.put_one(b"ssh-connection");
-        buffer.put_one("publickey");
-        buffer.put_u8(1);
-        buffer.put_one(method);
-        // buffer.put_u32((4 + method.len() + 4 + publickey.len()) as u32);
+        // let mut buffer = Buffer::new();
+        // buffer.put_one(&self.session_id);
+        // buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
+        // buffer.put_one(username);
+        // buffer.put_one(b"ssh-connection");
+        // buffer.put_one("publickey");
+        // buffer.put_u8(1);
         // buffer.put_one(method);
-        buffer.put_one(publickey);
+        // buffer.put_one(publickey);
+
+        let buffer = make_buffer_without_header! {
+            one: &self.session_id,
+            u8: SSH_MSG_USERAUTH_REQUEST,
+            one: username,
+            one: b"ssh-connection",
+            one: b"publickey",
+            u8: 1,
+            one: method,
+            one: publickey,
+        };
 
         let mut algo = sign::new_signature_by_name(method)
-            .ok_or(Error::ub("unable to create cipher"))?
+            .ok_or(Error::ub("Unable to create cipher"))?
             .create();
 
         algo.initialize(privatekey.as_ref())?;
         let sign = algo.signature(buffer.as_ref())?;
 
-        let mut buffer = Buffer::new();
-        buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
-        buffer.put_one(username);
-        buffer.put_one(b"ssh-connection");
-        buffer.put_one("publickey");
-        buffer.put_u8(1);
-        buffer.put_one(method);
-        // buffer.put_u32((4 + method.len() + 4 + publickey.len()) as u32);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u8(SSH_MSG_USERAUTH_REQUEST);
+        // buffer.put_one(username);
+        // buffer.put_one(b"ssh-connection");
+        // buffer.put_one("publickey");
+        // buffer.put_u8(1);
         // buffer.put_one(method);
-        buffer.put_one(publickey);
+        // // buffer.put_u32((4 + method.len() + 4 + publickey.len()) as u32);
+        // // buffer.put_one(method);
+        // buffer.put_one(publickey);
 
-        buffer.put_u32((4 + method.len() + 4 + sign.len()) as _);
+        // buffer.put_u32((4 + method.len() + 4 + sign.len()) as _);
 
-        buffer.put_one(method);
-        buffer.put_one(sign);
+        // buffer.put_one(method);
+        // buffer.put_one(sign);
 
-        self.stream.send_payload(buffer.as_ref()).await?;
+        let len = 4 + method.len() + 4 + sign.len();
+        let len = len as u32;
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_USERAUTH_REQUEST,
+            one: username,
+            one: b"ssh-connection",
+            one: b"publickey",
+            u8: 1,
+            one: method,
+            one: publickey,
+            u32: len,
+            one: method,
+            one: &sign,
+        };
+
+        self.stream.send_payload(buffer).await?;
 
         loop {
             match self.recv_msg().await? {
