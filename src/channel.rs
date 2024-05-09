@@ -73,10 +73,16 @@ pub enum ExitStatus {
 
 // #[derive(Debug)]
 pub enum Message {
+    /// It means the channel was closed by server, it can't be read or written;
     Close,
+    /// It means no more data was sent by server;
     Eof,
+    /// Obviously this is the standard output data, println!() in rust;
     Stdout(Vec<u8>),
+    /// Obviously this is the standard error data, eprintln!() in rust;
     Stderr(Vec<u8>),
+    /// When the channel::exec is called and the process ends, the server will send this to the client;
+    /// it may be sent before the Eof
     Exit(ExitStatus),
 }
 

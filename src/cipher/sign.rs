@@ -18,9 +18,15 @@ use openssl::{
 use crate::{
     error::{Error, Result},
     ssh::buffer::Buffer,
+    BigNumExt,
 };
 
 use super::*;
+macro_rules! invalid_key_format {
+    () => {
+        Error::invalid_format(format!("{}:{} invalid key format", file!(), line!()))
+    };
+}
 
 algo_list!(
     signature_all,
@@ -79,11 +85,11 @@ impl Signature for Ed25519 {
 
         // let invalid_format_key = || Error::invalid_format("invalid key format");
 
-        if key.take_one().ok_or_else(invalid_key_format)?.1 != b"ssh-ed25519" {
-            return Err(invalid_key_format());
+        if key.take_one().ok_or(invalid_key_format!())?.1 != b"ssh-ed25519" {
+            return Err(invalid_key_format!());
         }
 
-        let key = key.take_one().ok_or_else(invalid_key_format)?.1;
+        let key = key.take_one().ok_or(invalid_key_format!())?.1;
 
         let pkey = PKey::private_key_from_raw_bytes(key, Id::ED25519)?;
 
@@ -359,10 +365,10 @@ impl Verify for Dsa<Public> {
         let key = Buffer::from_slice(key);
         // let invalid_key_format = || Error::invalid_format("invalid key format");
 
-        let take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
+        let take_one = || Result::Ok(key.take_one().ok_or(invalid_key_format!())?.1);
 
         if take_one()? != b"ssh-dss" {
-            return Err(invalid_key_format());
+            return Err(invalid_key_format!());
         }
 
         let p = take_one()?;
@@ -427,10 +433,10 @@ impl Signature for Dsa<Private> {
         let key = Buffer::from_slice(key);
         // let invalid_key_format = || Error::invalid_format("invalid key format");
 
-        let take_one = || Result::Ok(key.take_one().ok_or_else(invalid_key_format)?.1);
+        let take_one = || Result::Ok(key.take_one().ok_or(invalid_key_format!())?.1);
 
         if take_one()? != b"ssh-dss" {
-            return Err(invalid_key_format());
+            return Err(invalid_key_format!());
         }
 
         let p = take_one()?;
@@ -467,9 +473,9 @@ impl Signature for Dsa<Private> {
     }
 }
 
-fn invalid_key_format() -> Error {
-    Error::invalid_format("invalid key format")
-}
+// fn invalid_key_format() -> Error {
+//     Error::invalid_format("invalid key format")
+// }
 
 #[derive(new)]
 struct Ecdsa<T> {
@@ -529,18 +535,18 @@ impl Signature for Ecdsa<Private> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
         let key = Buffer::from_slice(key);
 
-        let keytype = key.take_one().ok_or_else(invalid_key_format)?.1;
+        let keytype = key.take_one().ok_or(invalid_key_format!())?.1;
         if keytype != self.name.as_bytes() {
-            return Err(invalid_key_format());
+            return Err(invalid_key_format!());
         }
 
-        let nid = key.take_one().ok_or_else(invalid_key_format)?.1;
-        if self.name.ends_with(std::str::from_utf8(nid)?) {
-            return Err(invalid_key_format());
+        let nid = key.take_one().ok_or(invalid_key_format!())?.1;
+        if !self.name.ends_with(std::str::from_utf8(nid)?) {
+            return Err(invalid_key_format!());
         }
 
-        let public_key = key.take_one().ok_or_else(invalid_key_format)?.1;
-        let e = key.take_one().ok_or_else(invalid_key_format)?.1;
+        let public_key = key.take_one().ok_or(invalid_key_format!())?.1;
+        let e = key.take_one().ok_or(invalid_key_format!())?.1;
 
         let eckey = EcKey::from_curve_name(self.nid)?;
         let group = eckey.group();
@@ -561,17 +567,21 @@ impl Signature for Ecdsa<Private> {
 
     fn signature(&mut self, data: &[u8]) -> Result<Vec<u8>> {
         let hash = self.calculate_hash(data)?;
-
         let key = self.get_key()?;
 
-        let mut ctx = PkeyCtx::new(key)?;
+        let ec = key.ec_key()?;
 
-        ctx.sign_init()?;
+        let sign = EcdsaSig::sign(&hash, &ec)?;
 
-        let mut out = vec![];
-        ctx.sign_to_vec(&hash, &mut out)?;
+        let r = sign.r().to_ssh_bytes();
+        let s = sign.s().to_ssh_bytes();
 
-        Ok(out)
+        let out = make_buffer_without_header! {
+            one: r,
+            one: s,
+        };
+
+        Ok(out.into_vec())
     }
 
     fn name(&self) -> &str {
@@ -583,18 +593,18 @@ impl Verify for Ecdsa<Public> {
     fn initialize(&mut self, key: &[u8]) -> Result<()> {
         let key = Buffer::from_slice(key);
 
-        let keytype = key.take_one().ok_or_else(invalid_key_format)?.1;
+        let keytype = key.take_one().ok_or(invalid_key_format!())?.1;
         if self.name.as_bytes() != keytype {
-            return Err(invalid_key_format());
+            return Err(invalid_key_format!());
         }
 
-        let id = key.take_one().ok_or_else(invalid_key_format)?.1;
+        let id = key.take_one().ok_or(invalid_key_format!())?.1;
 
         if !self.name.ends_with(std::str::from_utf8(id)?) {
-            return Err(invalid_key_format());
+            return Err(invalid_key_format!());
         }
 
-        let public_key = key.take_one().ok_or_else(invalid_key_format)?.1;
+        let public_key = key.take_one().ok_or(invalid_key_format!())?.1;
 
         let eckey = EcKey::from_curve_name(self.nid)?;
         let group = eckey.group();
@@ -613,15 +623,15 @@ impl Verify for Ecdsa<Public> {
 
     fn verify(&mut self, signature: &[u8], data: &[u8]) -> Result<bool> {
         let signature = Buffer::from_slice(signature);
-        if signature.take_one().ok_or_else(invalid_key_format)?.1 != self.name.as_bytes() {
-            return Err(invalid_key_format());
+        if signature.take_one().ok_or(invalid_key_format!())?.1 != self.name.as_bytes() {
+            return Err(invalid_key_format!());
         }
 
-        let signature = signature.take_one().ok_or_else(invalid_key_format)?.1;
+        let signature = signature.take_one().ok_or(invalid_key_format!())?.1;
 
         let signature = Buffer::from_slice(signature);
-        let r = signature.take_one().ok_or_else(invalid_key_format)?.1;
-        let s = signature.take_one().ok_or_else(invalid_key_format)?.1;
+        let r = signature.take_one().ok_or(invalid_key_format!())?.1;
+        let s = signature.take_one().ok_or(invalid_key_format!())?.1;
 
         let ecsig =
             EcdsaSig::from_private_components(BigNum::from_slice(r)?, BigNum::from_slice(s)?)?;

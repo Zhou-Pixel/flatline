@@ -4,7 +4,7 @@ use std::mem::ManuallyDrop;
 
 use super::channel::ChannelOpenFailureReson;
 use super::handshake;
-use super::keys::openssh::OpenSSH;
+use super::keys::KeyParser;
 use super::ssh::stream::CipherStream;
 
 use crate::channel::ChannelInner;
@@ -18,7 +18,6 @@ use crate::error::Error;
 use crate::error::Result;
 use crate::forward::Listener;
 use crate::forward::Stream;
-use crate::keys::KeyParser;
 
 use super::channel::Message as ChannelMsg;
 use crate::handshake::Behavior;
@@ -32,7 +31,6 @@ use crate::ssh::{
 use super::channel::{Channel, ExitStatus};
 use super::msg::Message;
 use super::msg::Request;
-use super::{make_buffer_without_header, match_type, put_type};
 use crate::ssh::stream::PlainStream;
 use derive_new::new;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -287,7 +285,7 @@ impl Session {
         publickey: Option<&[u8]>,
         passphrase: Option<&[u8]>,
     ) -> Result<Userauth> {
-        let openssh = OpenSSH::default();
+        let openssh = KeyParser::default();
 
         let mut private = openssh.parse_privatekey(privatekey.as_ref(), passphrase)?;
 
@@ -297,6 +295,7 @@ impl Session {
             if public.key_type != private.key_type {
                 return Err(Error::invalid_format("Cipher doest't match"));
             }
+
             if public.key != private.public_key {
                 return Err(Error::invalid_format("Public key does't match"));
             }
@@ -1824,7 +1823,6 @@ where
             one: method,
             one: &sign,
         };
-
         self.stream.send_payload(buffer).await?;
 
         loop {

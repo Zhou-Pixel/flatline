@@ -23,8 +23,6 @@ use crate::{
 use super::o_channel;
 use bitflags::bitflags;
 
-use super::{make_buffer, match_type, put_type};
-
 bitflags! {
     // https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-01#section-7.3
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

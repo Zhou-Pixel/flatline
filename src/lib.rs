@@ -1,3 +1,5 @@
+#[macro_use]
+mod ssh;
 pub mod channel;
 pub mod cipher;
 pub mod error;
@@ -9,7 +11,6 @@ mod project;
 pub mod scp;
 pub mod session;
 pub mod sftp;
-mod ssh;
 pub mod x11;
 
 #[cfg(test)]
@@ -21,6 +22,38 @@ type OSender<T> = oneshot::Sender<T>;
 type OReceiver<T> = oneshot::Receiver<T>;
 type MWSender<T> = mpsc::WeakUnboundedSender<T>;
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
+
+trait BigNumExt {
+    fn to_ssh_bytes(&self) -> Vec<u8>;
+}
+
+impl BigNumExt for openssl::bn::BigNum {
+    fn to_ssh_bytes(&self) -> Vec<u8> {
+        // https://github.com/openssh/openssh-portable/blob/master/sshbuf-getput-basic.c#L585
+        let mut bytes = vec![0; 1];
+        let bn = self.to_vec();
+        if !bn.is_empty() && bn[0] & 0x80 != 0 {
+            bytes.extend(bn);
+        } else {
+            bytes = bn;
+        }
+        bytes
+    }
+}
+
+impl BigNumExt for openssl::bn::BigNumRef {
+    fn to_ssh_bytes(&self) -> Vec<u8> {
+        // https://github.com/openssh/openssh-portable/blob/master/sshbuf-getput-basic.c#L585
+        let mut bytes = vec![0; 1];
+        let bn = self.to_vec();
+        if !bn.is_empty() && bn[0] & 0x80 != 0 {
+            bytes.extend(bn);
+        } else {
+            bytes = bn;
+        }
+        bytes
+    }
+}
 
 fn m_channel<T>() -> (MSender<T>, MReceiver<T>) {
     mpsc::unbounded_channel()

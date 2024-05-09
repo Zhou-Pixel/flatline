@@ -4,7 +4,6 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-#[macro_export]
 macro_rules! match_type {
     (u8 $(,$i:expr)?) => {
         1
@@ -23,7 +22,6 @@ macro_rules! match_type {
     };
 }
 
-#[macro_export]
 macro_rules! put_type {
     ($buffer:ident, u8, $i:expr) => {
         $buffer.put_u8($i);
@@ -42,7 +40,6 @@ macro_rules! put_type {
     };
 }
 
-#[macro_export]
 macro_rules! make_buffer {
     ($($ty:ident: $value:expr $(,)?)+) => {
         {
@@ -56,7 +53,6 @@ macro_rules! make_buffer {
     };
 }
 
-#[macro_export]
 macro_rules! make_buffer_without_header {
     ($($ty:ident: $value:expr $(,)?)+) => {
         {

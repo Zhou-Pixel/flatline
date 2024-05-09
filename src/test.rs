@@ -6,7 +6,7 @@ use tokio::net::TcpStream;
 use crate::handshake::Behavior;
 use crate::handshake::Config;
 use crate::handshake::DefaultBehavior;
-use crate::keys::{self, KeyParser};
+use crate::keys;
 use crate::scp;
 use crate::session::Session;
 use crate::session::Userauth;
@@ -30,7 +30,7 @@ async fn open_session<B: Behavior + Send + 'static>(config: Config<B>) -> Sessio
 
 #[tokio::test]
 async fn userauth_publickey() {
-    let openssh = keys::openssh::OpenSSH::default();
+    let openssh = keys::KeyParser::default();
 
     let private_key_file = tokio::fs::read("/home/zhou/.ssh/id_ecdsa256")
         .await
