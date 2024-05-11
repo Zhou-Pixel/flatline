@@ -8,7 +8,7 @@ use tokio::net::TcpStream;
 
 include!("./user.conf");
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let socket = TcpStream::connect(HOST).await.unwrap();
     let config = Config::deafult_with_behavior();

@@ -281,7 +281,9 @@ where
             client: self.client.encrypt(client.1),
             server: self.server.encrypt(server.1),
             authed: false, // kex_strict: self.kex_strict,
-            block: None,
+            // block: None,
+            updated: false,
+            header: None,
         }
     }
 
@@ -368,7 +370,8 @@ where
         // WriteBytesExt::write_u32::<byteorder::BigEndian>(&mut packet, packet_len as _)?;
         packet.put_u8(padding_len as u8);
 
-        packet.extend(payload.to_vec());
+        // packet.extend(payload.to_vec());
+        packet.put_bytes(payload);
 
         packet.extend(rand_padding);
         self.stream.write(packet).await?;
@@ -391,8 +394,17 @@ where
     pub server: EncryptedEndpoint,
     pub authed: bool,
 
-    block: Option<Vec<u8>>, // pub kex_strict: bool,
+    // block: Option<Vec<u8>>, // pub kex_strict: bool,
+    updated: bool,
+
+    header: Option<Vec<u8>>,
 }
+
+// pub enum State {
+//     Idle,
+//     Update,
+//     Header(Vec<u8>),
+// }
 
 // impl<T> Deref for CipherStream<T>
 // where
@@ -455,6 +467,11 @@ where
                 mac,
             })
         };
+        if !self.updated {
+            self.decrypt
+                .update_sequence_number(self.server.sequence_number)?;
+            self.updated = true;
+        }
 
         // let server_crypt = &mut self.decrypt;
         // let server_mac = &mut self.server.mac;
@@ -466,10 +483,20 @@ where
 
         let (packet_size, packet, mac) = if self.decrypt.has_aad() {
             // let aad = self.stream.read_exact(4).await?;
+            let mut plain_text = vec![];
+            let size = match self.header {
+                Some(ref aad) => u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]),
+                None => {
+                    let mut aad = self.stream.read_exact(4).await?;
 
-            let aad = self.stream.fill(4).await?;
+                    self.decrypt.aad_update(&mut aad)?;
 
-            let size = u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]);
+                    let size = u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]);
+
+                    self.header = Some(aad);
+                    size
+                }
+            };
 
             if size as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(
@@ -477,11 +504,19 @@ where
                 )));
             }
 
+            // let aad = self.stream.fill(4).await?;
+
+            // let size = u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]);
+
+            // if size as usize > PACKET_MAXIMUM_SIZE - 4 {
+            //     return Err(Error::invalid_format(format!(
+            //         "Aes: Invalid packet length: {size}"
+            //     )));
+            // }
+
             // let left = self.stream.read_exact(size as usize).await?;
 
             // let left = self.stream.fill(4 + size as usize).await?;
-
-            let mut plain_text = vec![];
 
             // self.decrypt.update(&add_clone, None)?;
 
@@ -489,32 +524,35 @@ where
 
             let mac = if self.decrypt.has_tag() {
                 let tag_len = self.decrypt.tag_len();
-                let total = 4 + size as usize + tag_len;
-                let buf = self.stream.fill(total).await?;
+                let total = size as usize + tag_len;
 
-                self.decrypt.update(&buf[..4], None)?;
+                let buf = self.stream.read_exact(total).await?;
+                // let buf = self.stream.fill(total).await?;
+
+                // self.decrypt.update(&buf[..4], None)?;
+
+                // self.decrypt.aad_update(&buf[0..4])?;
 
                 self.decrypt
-                    .update(&buf[4..4 + size as usize], Some(&mut plain_text))?;
+                    .update(&buf[..size as usize], &mut plain_text)?;
 
-                self.decrypt
-                    .set_authentication_tag(&buf[4 + size as usize..])?;
+                self.decrypt.set_authentication_tag(&buf[size as usize..])?;
 
-                self.stream.consume_read_buffer(total);
                 None
             } else {
                 // unreachable here
-                let buf = self.stream.fill(4 + size as usize + mac_len).await?;
+                // let buf = self.stream.fill(size as usize + mac_len).await?;
+                let buf = self.stream.read_exact(size as usize + mac_len).await?;
 
-                self.decrypt.update(&buf[..4], None)?;
+                // self.decrypt.update(&buf[..4], None)?;
 
                 self.decrypt
-                    .update(&buf[4..4 + size as usize], Some(&mut plain_text))?;
+                    .update(&buf[..size as usize], &mut plain_text)?;
 
-                cipher_text.extend(&buf[..4 + size as usize]);
+                cipher_text.extend(&buf[..size as usize]);
 
-                let mac = buf[4 + size as usize..].to_vec();
-                self.stream.consume_read_buffer(4 + size as usize + mac_len);
+                let mac = buf[size as usize..].to_vec();
+
                 Some(mac)
             };
 
@@ -522,49 +560,68 @@ where
 
             (size, plain_text, mac)
         } else if self.server.mac.encrypt_then_mac() {
-            let packet_len = self.stream.fill(4).await?;
+            let len = match self.header {
+                Some(ref header) => {
+                    u32::from_be_bytes([header[0], header[1], header[2], header[3]])
+                }
+                None => {
+                    // let packet_len = self.stream.fill(4).await?;
+                    let aad = self.stream.read_exact(4).await?;
 
-            let packet_len =
-                u32::from_be_bytes([packet_len[0], packet_len[1], packet_len[2], packet_len[3]]);
+                    let len = u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]);
 
-            if packet_len as usize > PACKET_MAXIMUM_SIZE - 4 {
+                    self.header = Some(aad);
+
+                    len
+                }
+            };
+            let len = len as usize;
+            if len > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(
-                    "Etm: Invalid packet length: {packet_len}"
+                    "Etm: Invalid packet length: {len}"
                 )));
             }
 
-            let cipher = self.stream.fill(4 + packet_len as usize).await?;
-            cipher_text.extend(&cipher[4..]);
-            // cipher_text = self.stream.read_exact(packet_len as usize).await?;
+            let buf = self.stream.read_exact(len + mac_len).await?;
+
+            cipher_text.extend(&buf[..len]);
 
             let mut plaint_text = vec![];
+            self.decrypt.update(&cipher_text, &mut plaint_text)?;
 
-            let len = 4 + packet_len as usize;
-            let mac = self.stream.fill(len + mac_len).await?;
-            let mac = mac[len..].to_vec();
-
-            // must after async/await function
-            self.decrypt.update(&cipher_text, Some(&mut plaint_text))?;
             self.decrypt.finalize(&mut plaint_text)?;
 
-            self.stream.consume_read_buffer(len + mac_len);
+            // let cipher = self.stream.fill(len as usize).await?;
+            // cipher_text.extend(cipher);
+            // // cipher_text = self.stream.read_exact(packet_len as usize).await?;
 
-            (packet_len, plaint_text, Some(mac))
+            // let mut plaint_text = vec![];
+
+            // let mac = self.stream.fill(len as usize + mac_len).await?;
+            // let mac = mac[len as usize..].to_vec();
+
+            // // must after async/await function
+            // self.decrypt.update(&cipher_text, &mut plaint_text)?;
+            // self.decrypt.finalize(&mut plaint_text)?;
+
+            // self.stream.consume_read_buffer(len as usize + mac_len);
+
+            (len as u32, plaint_text, Some(buf[len..].to_vec()))
         } else {
-            if self.block.is_none() {
+            if self.header.is_none() {
                 // 解密最少需要一个block的数据
                 let size = self.stream.read_exact(block_size).await?;
 
                 let mut out_size = vec![];
-                self.decrypt.update(&size, Some(&mut out_size))?;
+                self.decrypt.update(&size, &mut out_size)?;
                 self.decrypt.finalize(&mut out_size)?;
 
-                self.block = Some(out_size);
+                self.header = Some(out_size);
 
                 cipher_text.extend(size);
             }
 
-            let block = self.block.as_ref().unwrap();
+            let block = self.header.as_ref().unwrap();
 
             let pakcet_size = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
 
@@ -575,15 +632,14 @@ where
             }
 
             let left_len = pakcet_size as usize - (block_size - 4);
-            let left = self.stream.fill(left_len + mac_len).await?;
+            let left = self.stream.read_exact(left_len + mac_len).await?;
 
-            cipher_text.extend(left);
+            cipher_text.extend(&left[..left_len]);
 
             // 解密数据
             let mut plain_text = vec![];
             // self.decrypt.reset()?;
-            self.decrypt
-                .update(&left[..left_len], Some(&mut plain_text))?;
+            self.decrypt.update(&left[..left_len], &mut plain_text)?;
             self.decrypt.finalize(&mut plain_text)?;
 
             // let mac = self.stream.read_exact(mac_len).await?;
@@ -591,12 +647,10 @@ where
             // assert_eq!(mac.len(), mac_len);
 
             // buffer_first.extend(plain_text);
-            let mut buffer = self.block.take().unwrap();
+            let mut buffer = self.header.take().unwrap();
             buffer.drain(..4);
             buffer.extend(plain_text);
             let mac = left[left_len..].to_vec();
-
-            self.stream.consume_read_buffer(left_len + mac_len);
 
             (pakcet_size, buffer, Some(mac))
         };
@@ -605,9 +659,14 @@ where
         // let mac = self.stream.read_exact(mac_len).await?;
 
         // 重新拼装整一个packet
-        let mut buffer = Buffer::new();
-        buffer.put_u32(packet_size);
-        buffer.put_bytes(packet);
+        // let mut buffer = Buffer::new();
+        // buffer.put_u32(packet_size);
+        // buffer.put_bytes(packet);
+
+        let buffer = make_buffer_without_header! {
+            u32: packet_size,
+            bytes: packet,
+        };
 
         if let Some(ref mac) = mac {
             // 计算mac所需的sqno
@@ -631,6 +690,8 @@ where
             }
         }
 
+        self.updated = false;
+        self.header = None;
         self.server.sequence_number = self.server.sequence_number.wrapping_add(1);
         let packet = func(buffer, mac).ok_or(Error::invalid_format("not enough data"))?;
         if !packet.payload.is_empty()
@@ -644,6 +705,7 @@ where
         Ok(packet)
     }
 
+    // not cancel safe
     pub async fn send_payload(&mut self, payload: impl AsRef<[u8]>) -> Result<()> {
         /*
           If compression has been negotiated, the 'payload' field (and only it)
@@ -707,40 +769,46 @@ where
         let mut packet = Buffer::new();
 
         let packet_len = payload_len + padding_len + 1;
+        //
 
-        packet.put_u32(packet_len as _);
+        self.encrypt
+            .update_sequence_number(self.client.sequence_number)?;
 
         // 处理aes-gcm的addlen
         if self.encrypt.has_aad() {
+            let mut bytes = (packet_len as u32).to_be_bytes();
+            self.encrypt.aad_update(&mut bytes)?;
+
+            packet.put_bytes(bytes);
             cipher_text.extend(packet.as_ref());
-            self.encrypt.update(packet.as_ref(), None)?;
         } else if self.client.mac.encrypt_then_mac() {
+            packet.put_u32(packet_len as _);
             cipher_text.extend(packet.as_ref());
+        } else {
+            packet.put_u32(packet_len as _);
         }
 
-        // WriteBytesExt::write_u32::<byteorder::BigEndian>(&mut packet, packet_len as _)?;
         packet.put_u8(padding_len as u8);
 
-        packet.extend(payload.to_vec());
+        // packet.extend(payload.to_vec());
+        packet.put_bytes(payload);
 
         packet.extend(rand_padding);
 
         let mut mac = None;
 
         if !self.client.mac.encrypt_then_mac() && !self.encrypt.has_tag() {
-            let mut buffer = Buffer::new();
-            buffer.put_u32(self.client.sequence_number);
-
-            self.client.mac.update(buffer.as_ref())?;
+            self.client
+                .mac
+                .update(self.client.sequence_number.to_be_bytes().as_ref())?;
             self.client.mac.update(packet.as_ref())?;
             mac = Some(self.client.mac.finalize()?);
             // println!("!en then mac");
             // self.client.mac.reset()?;
         }
 
-        // println!("send_payload plain text==========: {:?}", payload);
         self.encrypt
-            .update(packet[crypt_offset..].as_ref(), Some(&mut cipher_text))?;
+            .update(packet[crypt_offset..].as_ref(), &mut cipher_text)?;
 
         // for i in (crypt_offset..packet.len()).step_by(block_size) {
         //     let left = packet.len() - i;
@@ -770,11 +838,11 @@ where
             // println!("send_payload tag: {:?}", tag);
             cipher_text.extend(tag);
         } else if self.client.mac.encrypt_then_mac() {
-            let mut buffer = Buffer::new();
-            buffer.put_u32(self.client.sequence_number);
-
-            self.client.mac.update(buffer.as_ref())?;
+            self.client
+                .mac
+                .update(self.client.sequence_number.to_be_bytes().as_ref())?;
             self.client.mac.update(&cipher_text)?;
+
             let mac = self.client.mac.finalize()?;
 
             // self.client.mac.reset()?;

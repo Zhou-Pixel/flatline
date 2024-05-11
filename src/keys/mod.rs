@@ -295,7 +295,7 @@ impl KeyParser {
 
                     let mut plain_text = vec![];
 
-                    cipher.update(&section, Some(&mut plain_text))?;
+                    cipher.update(&section, &mut plain_text)?;
 
                     if cipher.has_tag() {
                         let tag = decode

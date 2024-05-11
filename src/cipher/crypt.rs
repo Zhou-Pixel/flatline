@@ -5,6 +5,8 @@ use indexmap::IndexMap;
 use openssl::{
     cipher::{Cipher, CipherRef},
     cipher_ctx::CipherCtx,
+    md_ctx::MdCtx,
+    pkey::{Id, PKey},
     symm::{self, Crypter},
 };
 
@@ -13,6 +15,7 @@ algo_list!(
     new_encrypt_all,
     new_encrypt_by_name,
     dyn Encrypt + Send,
+    "chacha20-poly1305@openssh.com" => Chacha20Poly1205::new(),
     "aes256-gcm@openssh.com" => Gcm::aes256_gcm_openssh(),
     "aes128-gcm@openssh.com" => Gcm::aes128_gcm_openssh(),
     "aes256-ctr" => CbcCtr::aes256_ctr(),
@@ -30,6 +33,7 @@ algo_list!(
     new_decrypt_all,
     new_decrypt_by_name,
     dyn Decrypt + Send,
+    "chacha20-poly1305@openssh.com" => Chacha20Poly1205::new(),
     "aes256-gcm@openssh.com" => Gcm::aes256_gcm_openssh(),
     "aes128-gcm@openssh.com" => Gcm::aes128_gcm_openssh(),
     "aes256-ctr" => CbcCtr::aes256_ctr(),
@@ -111,7 +115,7 @@ impl Gcm {
                 self.ctx = Some(ctx);
                 Ok(())
             }
-            _ => Err(Error::ub("Uninitlize")),
+            _ => Err(Error::ub("Uninitlized")),
         }
     }
 }
@@ -154,20 +158,12 @@ impl Encrypt for Gcm {
         Ok(())
     }
 
-    fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize> {
-        match buf {
-            Some(output) => {
-                let base = output.len();
-                output.resize(base + data.len() + self.block_size, 0);
-                let len = self.get_ctx()?.update(data, &mut output[base..])?;
-                output.truncate(base + len);
-                Ok(len)
-            }
-            None => {
-                self.get_ctx()?.aad_update(data)?;
-                Ok(0)
-            }
-        }
+    fn update(&mut self, data: &[u8], buf: &mut Vec<u8>) -> Result<usize> {
+        let base = buf.len();
+        buf.resize(base + data.len() + self.block_size, 0);
+        let len = self.get_ctx()?.update(data, &mut buf[base..])?;
+        buf.truncate(base + len);
+        Ok(len)
     }
 
     fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
@@ -187,6 +183,14 @@ impl Encrypt for Gcm {
 
     fn tag_len(&self) -> usize {
         self.tag_len
+    }
+
+    fn update_sequence_number(&mut self, _: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn aad_update(&mut self, aad: &mut [u8]) -> Result<()> {
+        self.get_ctx()?.aad_update(aad).map_err(|e| e.into())
     }
 }
 
@@ -228,20 +232,12 @@ impl Decrypt for Gcm {
         Ok(())
     }
 
-    fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize> {
-        match buf {
-            Some(output) => {
-                let base = output.len();
-                output.resize(base + data.len() + self.block_size, 0);
-                let len = self.get_ctx()?.update(data, &mut output[base..])?;
-                output.truncate(base + len);
-                Ok(len)
-            }
-            None => {
-                self.get_ctx()?.aad_update(data)?;
-                Ok(0)
-            }
-        }
+    fn update(&mut self, data: &[u8], buf: &mut Vec<u8>) -> Result<usize> {
+        let base = buf.len();
+        buf.resize(base + data.len() + self.block_size, 0);
+        let len = self.get_ctx()?.update(data, &mut buf[base..])?;
+        buf.truncate(base + len);
+        Ok(len)
     }
 
     fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
@@ -261,6 +257,15 @@ impl Decrypt for Gcm {
     fn tag_len(&self) -> usize {
         self.tag_len
     }
+
+    fn update_sequence_number(&mut self, _: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn aad_update(&mut self, aad: &mut [u8]) -> Result<()> {
+        self.get_ctx()?.aad_update(aad)?;
+        Ok(())
+    }
 }
 
 pub trait Encrypt {
@@ -274,7 +279,9 @@ pub trait Encrypt {
     fn tag_len(&self) -> usize;
 
     fn initialize(&mut self, iv: &[u8], key: &[u8]) -> Result<()>;
-    fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize>;
+    fn update_sequence_number(&mut self, number: u32) -> Result<()>;
+    fn aad_update(&mut self, aad: &mut [u8]) -> Result<()>;
+    fn update(&mut self, data: &[u8], out: &mut Vec<u8>) -> Result<usize>;
     fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize>;
     fn authentication_tag(&mut self) -> Result<Vec<u8>>;
     // fn reset(&mut self) -> Result<()>;
@@ -294,7 +301,9 @@ pub trait Decrypt {
     fn tag_len(&self) -> usize;
 
     fn initialize(&mut self, iv: &[u8], key: &[u8]) -> Result<()>;
-    fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize>;
+    fn update_sequence_number(&mut self, number: u32) -> Result<()>;
+    fn aad_update(&mut self, aad: &mut [u8]) -> Result<()>;
+    fn update(&mut self, data: &[u8], out: &mut Vec<u8>) -> Result<usize>;
     fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize>;
     fn set_authentication_tag(&mut self, data: &[u8]) -> Result<()>;
 
@@ -334,13 +343,10 @@ impl Encrypt for CbcCtr {
         Ok(())
     }
 
-    fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize> {
-        if let Some(buf) = buf {
-            self.get_ctx_mut()?.cipher_update_vec(data, buf)
-        } else {
-            self.get_ctx_mut()?.cipher_update(data, None)
-        }
-        .map_err(|e| e.into())
+    fn update(&mut self, data: &[u8], buf: &mut Vec<u8>) -> Result<usize> {
+        self.get_ctx_mut()?
+            .cipher_update_vec(data, buf)
+            .map_err(|e| e.into())
     }
 
     fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
@@ -361,6 +367,14 @@ impl Encrypt for CbcCtr {
 
     fn tag_len(&self) -> usize {
         0
+    }
+
+    fn update_sequence_number(&mut self, _: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn aad_update(&mut self, _: &mut [u8]) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -495,13 +509,9 @@ impl Decrypt for CbcCtr {
         Ok(())
     }
 
-    fn update(&mut self, data: &[u8], buf: Option<&mut Vec<u8>>) -> Result<usize> {
-        if let Some(buf) = buf {
-            self.get_ctx_mut()?.cipher_update_vec(data, buf)
-        } else {
-            self.get_ctx_mut()?.cipher_update(data, None)
-        }
-        .map_err(|e| e.into())
+    fn update(&mut self, data: &[u8], buf: &mut Vec<u8>) -> Result<usize> {
+        let len = self.get_ctx_mut()?.cipher_update_vec(data, buf)?;
+        Ok(len)
     }
 
     fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
@@ -523,6 +533,14 @@ impl Decrypt for CbcCtr {
     fn tag_len(&self) -> usize {
         0
     }
+
+    fn update_sequence_number(&mut self, _: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn aad_update(&mut self, _: &mut [u8]) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, new)]
@@ -531,4 +549,268 @@ struct CipherArgs {
     block_size: usize,
     key_len: usize,
     iv_len: usize,
+}
+
+#[derive(new)]
+struct Chacha20Poly1205 {
+    #[new(default)]
+    main_ctx: Option<CipherCtx>,
+
+    #[new(default)]
+    header_ctx: Option<CipherCtx>,
+
+    #[new(default)]
+    mac_ctx: Option<MdCtx>,
+
+    #[new(default)]
+    mac: Option<Vec<u8>>,
+}
+
+impl Encrypt for Chacha20Poly1205 {
+    fn name(&self) -> &str {
+        "chacha20-poly1305@openssh.com"
+    }
+
+    fn has_tag(&self) -> bool {
+        true
+    }
+
+    fn has_aad(&self) -> bool {
+        true
+    }
+
+    fn enable_increase_iv(&mut self, _: bool) {}
+
+    fn block_size(&self) -> usize {
+        8
+    }
+
+    fn iv_len(&self) -> usize {
+        0
+    }
+
+    fn key_len(&self) -> usize {
+        64
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
+    fn initialize(&mut self, _: &[u8], key: &[u8]) -> Result<()> {
+        let mut main_ctx = CipherCtx::new()?;
+
+        main_ctx.encrypt_init(Some(Cipher::chacha20()), Some(&key[0..32]), None)?;
+
+        self.main_ctx = Some(main_ctx);
+
+        let mut header_ctx = CipherCtx::new()?;
+
+        header_ctx.encrypt_init(Some(Cipher::chacha20()), Some(&key[32..]), None)?;
+
+        self.header_ctx = Some(header_ctx);
+
+        Ok(())
+    }
+
+    fn update_sequence_number(&mut self, number: u32) -> Result<()> {
+        let bytes = u64::from(number).to_be_bytes();
+
+        let mut iv = [0; 16];
+
+        iv[8..].copy_from_slice(&bytes);
+
+        let header_ctx = self.get_header_ctx()?;
+
+        header_ctx.encrypt_init(None, None, Some(&iv))?;
+
+        let main_ctx = self.get_main_ctx()?;
+
+        main_ctx.encrypt_init(None, None, Some(&iv))?;
+
+        let mut poly_key = [0; 64];
+
+        main_ctx.cipher_update(&[0; 64], Some(&mut poly_key))?;
+
+        let pkey = PKey::private_key_from_raw_bytes(&poly_key[..32], Id::POLY1305)?;
+
+        let mut mac_ctx = MdCtx::new()?;
+
+        mac_ctx.digest_sign_init(None, &pkey)?;
+
+        self.mac_ctx = Some(mac_ctx);
+
+        Ok(())
+    }
+
+    fn aad_update(&mut self, aad: &mut [u8]) -> Result<()> {
+        let header_ctx = self.get_header_ctx()?;
+
+        let input = aad.to_vec();
+
+        header_ctx.cipher_update(&input, Some(aad))?;
+
+        header_ctx.cipher_final(aad)?;
+
+        self.get_mac_ctx()?.digest_sign_update(aad)?;
+
+        Ok(())
+    }
+
+    fn update(&mut self, data: &[u8], out: &mut Vec<u8>) -> Result<usize> {
+        let pos = out.len();
+        let len = self.get_main_ctx()?.cipher_update_vec(data, out)?;
+
+        self.get_mac_ctx()?
+            .digest_sign_update(&out[pos..pos + len])?;
+
+        Ok(len)
+    }
+
+    fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        self.get_main_ctx()?
+            .cipher_final_vec(buf)
+            .map_err(|e| e.into())
+    }
+
+    fn authentication_tag(&mut self) -> Result<Vec<u8>> {
+        let mut tag = vec![];
+        self.get_mac_ctx()?.digest_sign_final_to_vec(&mut tag)?;
+        Ok(tag)
+    }
+}
+
+
+impl Decrypt for Chacha20Poly1205 {
+    fn name(&self) -> &str {
+        "chacha20-poly1305@openssh.com"
+    }
+
+    fn has_tag(&self) -> bool {
+        true
+    }
+
+    fn has_aad(&self) -> bool {
+        true
+    }
+
+    fn block_size(&self) -> usize {
+        8
+    }
+
+    fn enable_increase_iv(&mut self, _: bool) {}
+
+    fn iv_len(&self) -> usize {
+        0
+    }
+
+    fn key_len(&self) -> usize {
+        64
+    }
+
+    fn tag_len(&self) -> usize {
+        16
+    }
+
+    fn initialize(&mut self, _: &[u8], key: &[u8]) -> Result<()> {
+        let mut main_ctx = CipherCtx::new()?;
+
+        main_ctx.decrypt_init(Some(Cipher::chacha20()), Some(&key[0..32]), None)?;
+
+        self.main_ctx = Some(main_ctx);
+
+        let mut header_ctx = CipherCtx::new()?;
+
+        header_ctx.decrypt_init(Some(Cipher::chacha20()), Some(&key[32..]), None)?;
+
+        self.header_ctx = Some(header_ctx);
+
+        Ok(())
+    }
+
+    fn update_sequence_number(&mut self, number: u32) -> Result<()> {
+        let bytes = u64::from(number).to_be_bytes();
+
+        let mut iv = [0; 16];
+
+        iv[8..].copy_from_slice(&bytes);
+
+        let header_ctx = self.get_header_ctx()?;
+
+        header_ctx.decrypt_init(None, None, Some(&iv))?;
+
+        let main_ctx = self.get_main_ctx()?;
+
+        main_ctx.decrypt_init(None, None, Some(&iv))?;
+
+        let mut poly_key = [0; 64];
+
+        main_ctx.cipher_update(&[0; 64], Some(&mut poly_key))?;
+
+        let pkey = PKey::private_key_from_raw_bytes(&poly_key[..32], Id::POLY1305)?;
+
+        let mut mac_ctx = MdCtx::new()?;
+
+        mac_ctx.digest_sign_init(None, &pkey)?;
+
+        self.mac_ctx = Some(mac_ctx);
+
+        Ok(())
+    }
+
+    fn aad_update(&mut self, aad: &mut [u8]) -> Result<()> {
+        let input = aad.to_vec();
+        self.get_mac_ctx()?.digest_sign_update(&input)?;
+
+        let header_ctx = self.get_header_ctx()?;
+
+        header_ctx.cipher_update(&input, Some(aad))?;
+
+        header_ctx.cipher_final(aad)?;
+
+        Ok(())
+    }
+
+    fn update(&mut self, data: &[u8], out: &mut Vec<u8>) -> Result<usize> {
+        self.get_mac_ctx()?.digest_sign_update(data)?;
+        let len = self.get_main_ctx()?.cipher_update_vec(data, out)?;
+        Ok(len)
+    }
+
+    fn finalize(&mut self, buf: &mut Vec<u8>) -> Result<usize> {
+        let len = self.get_main_ctx()?.cipher_final_vec(buf)?;
+
+        let mut tag = vec![];
+        self.get_mac_ctx()?.digest_sign_final_to_vec(&mut tag)?;
+
+        if self.mac != Some(tag) {
+            return Err(Error::MacVerificationFailed);
+        }
+
+        self.mac = None;
+
+        Ok(len)
+    }
+
+    fn set_authentication_tag(&mut self, data: &[u8]) -> Result<()> {
+        self.mac = Some(data.to_vec());
+        Ok(())
+    }
+}
+
+impl Chacha20Poly1205 {
+    fn get_main_ctx(&mut self) -> Result<&mut CipherCtx> {
+        self.main_ctx.as_mut().ok_or(Error::ub("Uninitlized"))
+    }
+
+    fn get_header_ctx(&mut self) -> Result<&mut CipherCtx> {
+        self.header_ctx.as_mut().ok_or(Error::ub("Uninitlized"))
+    }
+
+    fn get_mac_ctx(&mut self) -> Result<&mut MdCtx> {
+        self.mac_ctx
+            .as_mut()
+            .ok_or(Error::ub("call update_sequence_number first"))
+    }
+
 }

@@ -14,6 +14,7 @@ algo_list!(
     new_mac_by_name,
     dyn Mac + Send,
     "hmac-sha1" => HMac {
+        name: "hmac-sha1".to_string(),
         mac_len: 20,
         key_len: 20,
         ctx: None,
@@ -22,6 +23,7 @@ algo_list!(
         digest: Md::sha1(),
     },
     "hmac-sha1-etm@openssh.com" => HMac {
+        name: "hmac-sha1-etm@openssh.com".to_string(),
         mac_len: 20,
         key_len: 20,
         ctx: None,
@@ -30,78 +32,91 @@ algo_list!(
         digest: Md::sha1(),
     },
     "hmac-sha1-96" => HMac::new(
+        "hmac-sha1-96".to_string(),
         12,
         20,
         false,
         Md::sha1(),
     ),
     "hmac-sha1-96-etm@openssh.com" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         12,
         20,
         true,
         Md::sha1(),
     ),
     "hmac-md5" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         16,
         16,
         false,
         Md::md5(),
     ),
     "hmac-md5-etm@openssh.com" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         16,
         16,
         true,
         Md::md5(),
     ),
     "hmac-md5-96" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         12,
         16,
         false,
         Md::md5(),
     ),
     "hmac-md5-96-etm@openssh.com" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         12,
         16,
         true,
         Md::md5(),
     ),
     "hmac-sha2-512" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         64,
         64,
         false,
         Md::sha512(),
     ),
     "hmac-sha2-512-etm@openssh.com" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         64,
         64,
         true,
         Md::sha512(),
     ),
     "hmac-sha2-256" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         32,
         32,
         false,
         Md::sha256(),
     ),
     "hmac-sha2-256-etm@openssh.com" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         32,
         32,
         true,
         Md::sha256(),
     ),
     "hmac-ripemd160" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         20,
         20,
         false,
         Md::ripemd160(),
     ),
     "hmac-ripemd160@openssh.com" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         20,
         20,
         false,
         Md::ripemd160(),
     ),
     "hmac-ripemd160-etm@openssh.com" => HMac::new(
+        "hmac-sha1-96-etm@openssh.com".to_string(),
         20,
         20,
         true,
@@ -139,9 +154,14 @@ impl Mac for Never {
     fn finalize(&mut self) -> Result<Vec<u8>> {
         Ok(vec![])
     }
+
+    fn name(&self) -> &str {
+        "None"
+    }
 }
 
 pub trait Mac {
+    fn name(&self) -> &str;
     fn encrypt_then_mac(&self) -> bool;
     fn key_len(&self) -> usize;
     fn mac_len(&self) -> usize;
@@ -152,6 +172,7 @@ pub trait Mac {
 
 #[derive(new)]
 struct HMac {
+    name: String,
     mac_len: usize,
     key_len: usize,
     #[new(default)]
@@ -214,5 +235,9 @@ impl Mac for HMac {
         }
         self.ctx = Some(ctx);
         Ok(buf)
+    }
+
+    fn name(&self) -> &str {
+        &self.name
     }
 }
