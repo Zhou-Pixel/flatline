@@ -2,6 +2,7 @@ use flatline::handshake::Config;
 use flatline::session::Session;
 use flatline::session::Userauth;
 use tokio::fs;
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
@@ -24,22 +25,33 @@ async fn main() {
 
     let listener = TcpListener::bind("127.0.0.1:5000").await.unwrap();
 
+    println!("press enter to exit");
+    let mut stdin = tokio::io::stdin();
     loop {
-        let mut local = listener.accept().await.unwrap().0;
-        let local_addr = local.peer_addr().unwrap();
-        let mut remote = session
-            .direct_tcpip_default(
-                ("127.0.0.1", 5000),
-                (local_addr.ip().to_string(), local_addr.port() as u32),
-            )
-            .await
-            .unwrap();
+        tokio::select! {
+            res = listener.accept() => {
+                let mut local = res.unwrap().0;
+                let local_addr = local.peer_addr().unwrap();
+                let mut remote = session
+                    .direct_tcpip_default(
+                        ("127.0.0.1", 5000),
+                        (local_addr.ip().to_string(), local_addr.port() as u32),
+                    )
+                    .await
+                    .unwrap();
 
-        tokio::spawn(async move {
-            tokio::io::copy_bidirectional(&mut local, &mut remote)
-                .await
-                .unwrap();
-        });
+                tokio::spawn(async move {
+                    tokio::io::copy_bidirectional(&mut local, &mut remote)
+                        .await
+                        .unwrap();
+                });
+
+            }
+
+            _ = stdin.read_u8() => {
+                break;
+            }
+        }
     }
 
     session.disconnect_default().await.unwrap();
