@@ -978,8 +978,8 @@ impl KeyExChange for ECDHKexExchange {
         let mut hash = MdWrapper::initialize(self.hash)?;
 
         let mut update = |data: &[u8]| {
-            let buffer = Buffer::from_one(data);
-            hash.update(buffer.as_ref())?;
+            hash.update((data.len() as u32).to_be_bytes().as_ref())?;
+            hash.update(data)?;
             Result::Ok(())
         };
 
@@ -1095,7 +1095,6 @@ impl KeyExChange for Curve25519 {
             hash.update(buffer.as_ref())?;
             Result::Ok(())
         };
-
         fn check(data: &[u8]) -> Vec<u8> {
             let bn = BigNum::from_slice(data).unwrap();
             let mut bndata = bn.to_vec();

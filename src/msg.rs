@@ -125,7 +125,7 @@ pub(crate) enum Request {
     },
 }
 
-#[derive(Debug)]
+#[derive(custom_debug_derive::Debug)]
 pub(crate) enum Message {
     UserauthSuccess,
     UserauthFailure {
@@ -137,7 +137,7 @@ pub(crate) enum Message {
         msg: String,
         tag: String,
     },
-    HostKeysOpenSsh {
+    HostKeysOpenSSH {
         want_reply: bool,
         hostkeys: Vec<Vec<u8>>,
     },
@@ -155,10 +155,12 @@ pub(crate) enum Message {
     },
     ChannelStdoutData {
         recipient: u32,
+        #[debug(skip)]
         data: Vec<u8>,
     },
     ChannelStderrData {
         recipient: u32,
+        #[debug(skip)]
         data: Vec<u8>,
     },
     ChannelSuccess(u32),
@@ -194,6 +196,9 @@ pub(crate) enum Message {
     },
     Ignore(Vec<u8>),
     Ping(Vec<u8>),
+    KeepAliveOpenSSH {
+        want_reply: bool,
+    },
     ForwardTcpIp {
         sender: u32,
         initial: u32,
@@ -203,6 +208,7 @@ pub(crate) enum Message {
         originator_address: String, // originator IP address
         originator_port: u32,       // originator port
     },
+    // ExtInfo(HashMap<String, Vec<u8>>)
 }
 
 impl Message {
@@ -282,10 +288,12 @@ impl Message {
                         while buffer.len() != 0 {
                             hostkeys.push(buffer.take_one()?.1.to_vec());
                         }
-                        Some(Self::HostKeysOpenSsh {
+                        Some(Self::HostKeysOpenSSH {
                             want_reply,
                             hostkeys,
                         })
+                    } else if line == b"keepalive@openssh.com" {
+                        Some(Self::KeepAliveOpenSSH { want_reply: buffer.take_u8()? != 0 })
                     } else {
                         detail = format!("unknown global reqeust: {:?}", utf8(line)?);
                         // Err(Error::ssh_packet_parse(format!(

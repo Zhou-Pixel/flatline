@@ -587,7 +587,7 @@ where
             Message::Ping(data) => {
                 self.session_pong(data).await?;
             }
-            Message::HostKeysOpenSsh {
+            Message::HostKeysOpenSSH {
                 want_reply,
                 hostkeys,
             } => {
@@ -638,6 +638,9 @@ where
                 )
                 .await?;
             }
+            Message::KeepAliveOpenSSH { want_reply } => {
+                self.handle_keep_alive(want_reply).await?;
+            }
             msg => {
                 println!("msg :{:?} from server is ignore", msg);
             }
@@ -652,6 +655,13 @@ where
             .ok_or(Error::ub("Session has been dropped"))
     }
 
+    async fn handle_keep_alive(&mut self, want_reply: bool) -> Result<()> {
+        if want_reply {
+            self.stream.send_payload(&[SSH_MSG_REQUEST_SUCCESS]).await?;
+        }
+        Ok(())
+    }
+    
     #[allow(clippy::too_many_arguments)]
     async fn accpet_tcpip_forward(
         &mut self,
