@@ -680,7 +680,6 @@ impl Encrypt for Chacha20Poly1205 {
     }
 }
 
-
 impl Decrypt for Chacha20Poly1205 {
     fn name(&self) -> &str {
         "chacha20-poly1305@openssh.com"
@@ -812,5 +811,4 @@ impl Chacha20Poly1205 {
             .as_mut()
             .ok_or(Error::ub("call update_sequence_number first"))
     }
-
 }

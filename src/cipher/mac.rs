@@ -101,27 +101,27 @@ algo_list!(
         true,
         Md::sha256(),
     ),
-    "hmac-ripemd160" => HMac::new(
-        "hmac-sha1-96-etm@openssh.com".to_string(),
-        20,
-        20,
-        false,
-        Md::ripemd160(),
-    ),
-    "hmac-ripemd160@openssh.com" => HMac::new(
-        "hmac-sha1-96-etm@openssh.com".to_string(),
-        20,
-        20,
-        false,
-        Md::ripemd160(),
-    ),
-    "hmac-ripemd160-etm@openssh.com" => HMac::new(
-        "hmac-sha1-96-etm@openssh.com".to_string(),
-        20,
-        20,
-        true,
-        Md::ripemd160(),
-    ),
+    // "hmac-ripemd160" => HMac::new(
+    //     "hmac-sha1-96-etm@openssh.com".to_string(),
+    //     20,
+    //     20,
+    //     false,
+    //     Md::ripemd160(),
+    // ),
+    // "hmac-ripemd160@openssh.com" => HMac::new(
+    //     "hmac-sha1-96-etm@openssh.com".to_string(),
+    //     20,
+    //     20,
+    //     false,
+    //     Md::ripemd160(),
+    // ),
+    // "hmac-ripemd160-etm@openssh.com" => HMac::new(
+    //     "hmac-sha1-96-etm@openssh.com".to_string(),
+    //     20,
+    //     20,
+    //     true,
+    //     Md::ripemd160(),
+    // ),
 );
 
 pub fn none() -> Boxtory<dyn Mac + Send> {
@@ -156,7 +156,7 @@ impl Mac for Never {
     }
 
     fn name(&self) -> &str {
-        "None"
+        "none"
     }
 }
 

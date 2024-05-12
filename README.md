@@ -30,6 +30,7 @@ SSH-2.0 client library
     - `ecdsa-sha2-nistp256`
     - `ecdsa-sha2-nistp384`
 - **encryption**
+    - `chacha20-poly1305@openssh.com`
     - `aes256-gcm@openssh.com`
     - `aes128-gcm@openssh.com`
     - `aes256-ctr`
@@ -53,9 +54,6 @@ SSH-2.0 client library
     - `hmac-sha2-512-etm@openssh.com`
     - `hmac-sha2-256`
     - `hmac-sha2-256-etm@openssh.com`
-    - `hmac-ripemd160`
-    - `hmac-ripemd160@openssh.com`
-    - `hmac-ripemd160-etm@openssh.com`
 - **compress**
     - `zlib`
     - `zlib@openssh.com`
@@ -93,4 +91,4 @@ async fn main() {
 }
 ```
 
-<font size=5>:exclamation:__flatline is beta now and can contain breaking changes!__</font>
+> *flatline is beta now and can contain breaking changes!*

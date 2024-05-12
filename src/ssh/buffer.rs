@@ -1,7 +1,7 @@
 use std::{
     cell::Cell,
     mem::size_of,
-    ops::{Index, IndexMut},
+    ops::{Deref, Index, IndexMut},
 };
 
 macro_rules! match_type {
@@ -75,11 +75,13 @@ impl From<Buffer<Vec<u8>>> for Vec<u8> {
     }
 }
 
-// impl From<Vec<u8>> for Buffer {
-//     fn from(value: Vec<u8>) -> Self {
-//         Self(value)
-//     }
-// }
+impl<T: AsRef<[u8]>> Deref for Buffer<T> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
 
 impl<T: AsRef<[u8]>> AsRef<[u8]> for Buffer<T> {
     fn as_ref(&self) -> &[u8] {
@@ -100,33 +102,6 @@ impl<I, T: IndexMut<I>> IndexMut<I> for Buffer<T> {
         self.0.index_mut(index)
     }
 }
-
-// impl IntoIterator for Buffer {
-//     type Item = u8;
-
-//     type IntoIter = IntoIter<u8>;
-
-//     fn into_iter(self) -> Self::IntoIter {
-//         self.0.into_iter()
-//     }
-// }
-
-// impl<T> Extend<T> for Buffer {
-
-//     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-//             self.0.extend(iter)
-//     }
-
-//     #[inline]
-//     fn extend_one(&mut self, item: T) {
-//         self.0.extend_one(item)
-//     }
-
-//     #[inline]
-//     fn extend_reserve(&mut self, additional: usize) {
-//         todo!()
-//     }
-// }
 
 impl Buffer<Cell<&[u8]>> {
     pub fn from_slice(slice: &[u8]) -> Buffer<Cell<&[u8]>> {
@@ -218,6 +193,10 @@ impl Buffer<Vec<u8>> {
         Self(vec)
     }
 
+    pub fn as_slice(&self) -> Buffer<Cell<&[u8]>> {
+        Buffer::from_slice(&self.0)
+    }
+
     pub fn new() -> Self {
         Default::default()
     }
@@ -245,20 +224,6 @@ impl Buffer<Vec<u8>> {
     pub fn into_vec(self) -> Vec<u8> {
         self.0
     }
-
-    // pub fn take_u64(&mut self) -> Option<u64> {
-    //     if self.0.len() < size_of::<u64>() {
-    //         return None;
-    //     }
-
-    //     let num = u64::from_be_bytes([
-    //         self.0[0], self.0[1], self.0[2], self.0[3], self.0[4], self.0[5], self.0[6], self.0[7],
-    //     ]);
-
-    //     self.0.drain(..size_of::<u64>());
-
-    //     Some(num)
-    // }
 
     pub fn take_u32(&mut self) -> Option<u32> {
         if self.0.len() < size_of::<u32>() {

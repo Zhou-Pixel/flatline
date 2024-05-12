@@ -93,24 +93,6 @@ impl DisconnectReson {
     pub const ILLEGAL_USER_NAME: Self = Self(SSH_DISCONNECT_ILLEGAL_USER_NAME);
 }
 
-// #[derive(Debug, Clone)]
-// pub struct Address(String);
-
-// impl Address {
-//     pub const ALL: &'static str = "";
-//     pub const IPV4_ALL: &'static str = "0.0.0.0";
-//     pub const IPV6_ALL: &'static str = "::";
-//     pub const LOCALHOST: &'static str = "localhost";
-//     pub const IPV4_LOCALHOST: &'static str = "127.0.0.1";
-//     pub const IPV6_LOCALHOST: &'static str = "::1";
-// }
-
-// impl From<&str> for Address {
-//     fn from(value: &str) -> Self {
-//         Address(value.to_string())
-//     }
-// }
-
 pub struct Session {
     sender: ManuallyDrop<MSender<Request>>,
 }
@@ -141,10 +123,8 @@ impl Session {
     fn manually_drop(&mut self) {
         unsafe { ManuallyDrop::drop(&mut self.sender) }
     }
-    // pub async fn channel_stdout_read(&mut self, channel: &mut Channel) -> Result<Vec<u8>> {
-    //     channel.stdout.recv().await.map_err(|_| Error::Disconnect)
-    // }
 
+    #[inline]
     pub async fn direct_tcpip_default(
         &self,
         remote: (impl Into<String>, u32),
@@ -184,6 +164,7 @@ impl Session {
             .await
     }
 
+    #[inline]
     pub async fn tcpip_forward(
         &self,
         address: impl Into<String>,
@@ -203,6 +184,7 @@ impl Session {
         recver.await?
     }
 
+    #[inline]
     pub async fn disconnect_default(self) -> Result<()> {
         self.disconnect(DisconnectReson::BY_APPLICATION, "exit")
             .await
