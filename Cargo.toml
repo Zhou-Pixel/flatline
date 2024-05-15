@@ -26,7 +26,6 @@ tokio = { version = "1", features = ["io-util", "rt", "macros", "sync"] }
 [features]
 openssl-vendored = [ "openssl/vendored" ]
 default = [ "openssl-vendored" ]
-async-compatible = []
 
 
 

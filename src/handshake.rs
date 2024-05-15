@@ -1,6 +1,3 @@
-#[cfg(not(feature = "async-compatible"))]
-use std::future::Future;
-
 use super::cipher::hash::Hash;
 use super::cipher::kex::Summary as DHSumary;
 use super::cipher::Boxtory;
@@ -36,35 +33,34 @@ pub struct Config<B> {
     pub(crate) ext: bool,
 }
 
-#[cfg(not(feature = "async-compatible"))]
-pub trait Behavior {
-    fn openssh_hostkeys(
-        &mut self,
-        want_reply: bool,
-        hostkeys: &[&[u8]],
-    ) -> impl Future<Output = Result<()>> + Send;
-    fn debug(
-        &mut self,
-        always_display: bool,
-        msg: &str,
-        tag: &str,
-    ) -> impl Future<Output = Result<()>> + Send;
-    fn ignore(&mut self, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
-    fn useauth_banner(&mut self, msg: &str, tag: &str) -> impl Future<Output = Result<()>> + Send;
-    fn disconnect(
-        &mut self,
-        reson: DisconnectReson,
-        dest: &str,
-        tag: &str,
-    ) -> impl Future<Output = Result<()>> + Send;
-    fn verify_server_hostkey(
-        &mut self,
-        keytype: &str,
-        hostkeys: &[u8],
-    ) -> impl Future<Output = Result<bool>> + Send;
-}
+// #[cfg(not(feature = "async-compatible"))]
+// pub trait Behavior {
+//     fn openssh_hostkeys(
+//         &mut self,
+//         want_reply: bool,
+//         hostkeys: &[&[u8]],
+//     ) -> impl Future<Output = Result<()>> + Send;
+//     fn debug(
+//         &mut self,
+//         always_display: bool,
+//         msg: &str,
+//         tag: &str,
+//     ) -> impl Future<Output = Result<()>> + Send;
+//     fn ignore(&mut self, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
+//     fn useauth_banner(&mut self, msg: &str, tag: &str) -> impl Future<Output = Result<()>> + Send;
+//     fn disconnect(
+//         &mut self,
+//         reson: DisconnectReson,
+//         dest: &str,
+//         tag: &str,
+//     ) -> impl Future<Output = Result<()>> + Send;
+//     fn verify_server_hostkey(
+//         &mut self,
+//         keytype: &str,
+//         hostkeys: &[u8],
+//     ) -> impl Future<Output = Result<bool>> + Send;
+// }
 
-#[cfg(feature = "async-compatible")]
 #[async_trait::async_trait]
 pub trait Behavior {
     async fn openssh_hostkeys(&mut self, want_reply: bool, hostkeys: &[&[u8]]) -> Result<()>;
@@ -73,6 +69,7 @@ pub trait Behavior {
     async fn useauth_banner(&mut self, msg: &str, tag: &str) -> Result<()>;
     async fn disconnect(&mut self, reson: DisconnectReson, dest: &str, tag: &str) -> Result<()>;
     async fn verify_server_hostkey(&mut self, keytype: &str, hostkeys: &[u8]) -> Result<bool>;
+    async fn server_signature_algorithms(&mut self, algorithms: &[&str]) -> Result<()>;
 }
 
 impl Config<DefaultBehavior> {
@@ -84,34 +81,33 @@ impl Config<DefaultBehavior> {
 #[derive(Default)]
 pub struct DefaultBehavior;
 
-#[cfg(not(feature = "async-compatible"))]
-impl Behavior for DefaultBehavior {
-    async fn openssh_hostkeys(&mut self, _: bool, _: &[&[u8]]) -> Result<()> {
-        Ok(())
-    }
+// #[cfg(not(feature = "async-compatible"))]
+// impl Behavior for DefaultBehavior {
+//     async fn openssh_hostkeys(&mut self, _: bool, _: &[&[u8]]) -> Result<()> {
+//         Ok(())
+//     }
 
-    async fn debug(&mut self, _: bool, _: &str, _: &str) -> Result<()> {
-        Ok(())
-    }
+//     async fn debug(&mut self, _: bool, _: &str, _: &str) -> Result<()> {
+//         Ok(())
+//     }
 
-    async fn ignore(&mut self, _: &[u8]) -> Result<()> {
-        Ok(())
-    }
+//     async fn ignore(&mut self, _: &[u8]) -> Result<()> {
+//         Ok(())
+//     }
 
-    async fn disconnect(&mut self, _: DisconnectReson, _: &str, _: &str) -> Result<()> {
-        Ok(())
-    }
+//     async fn disconnect(&mut self, _: DisconnectReson, _: &str, _: &str) -> Result<()> {
+//         Ok(())
+//     }
 
-    async fn verify_server_hostkey(&mut self, _: &str, _: &[u8]) -> Result<bool> {
-        Ok(true)
-    }
+//     async fn verify_server_hostkey(&mut self, _: &str, _: &[u8]) -> Result<bool> {
+//         Ok(true)
+//     }
 
-    async fn useauth_banner(&mut self, _: &str, _: &str) -> Result<()> {
-        Ok(())
-    }
-}
+//     async fn useauth_banner(&mut self, _: &str, _: &str) -> Result<()> {
+//         Ok(())
+//     }
+// }
 
-#[cfg(feature = "async-compatible")]
 #[async_trait::async_trait]
 impl Behavior for DefaultBehavior {
     async fn openssh_hostkeys(&mut self, _: bool, _: &[&[u8]]) -> Result<()> {
@@ -135,6 +131,10 @@ impl Behavior for DefaultBehavior {
     }
 
     async fn useauth_banner(&mut self, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn server_signature_algorithms(&mut self, _: &[&str]) -> Result<()> {
         Ok(())
     }
 }

@@ -73,6 +73,33 @@ pub enum Userauth {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct DisconnectReson(pub u32);
 
+#[async_trait::async_trait]
+pub trait Interactive: Send {
+    async fn response(
+        &mut self,
+        name: &str,
+        instruction: &str,
+        prompts: &[(&str, bool)],
+    ) -> Result<Vec<String>>;
+}
+
+// #[async_trait::async_trait]
+// impl<T> Interactive for T
+// where
+//     T: Send + FnMut(&str, &str, &[(&str, bool)]) -> Result<Vec<String>>,
+// {
+//     async fn response(
+//         &mut self,
+//         name: &str,
+//         instruction: &str,
+//         prompts: &[(&str, bool)],
+//     ) -> Result<Vec<String>> {
+//         let res = self(name, instruction, prompts)?;
+
+//         Ok(res)
+//     }
+// }
+
 impl DisconnectReson {
     pub const HOST_NOT_ALLOWED_TO_CONNECT: Self = Self(SSH_DISCONNECT_HOST_NOT_ALLOWED_TO_CONNECT);
     pub const PROTOCOL_ERROR: Self = Self(SSH_DISCONNECT_PROTOCOL_ERROR);
@@ -331,6 +358,25 @@ impl Session {
         };
 
         self.sender.send(request).map_err(|_| Error::Disconnected)?;
+        recver.await?
+    }
+
+    pub async fn userauth_keyboard_interactive<T: Interactive + 'static>(
+        &self,
+        username: impl Into<String>,
+        prefer: &[&str],
+        cb: T,
+    ) -> Result<bool> {
+        let (sender, recver) = o_channel();
+        let request = Request::UserauthKeyboardInteractive {
+            username: username.into(),
+            submethods: prefer.into_iter().map(|v| v.to_string()).collect(),
+            cb: Box::new(cb),
+            sender,
+        };
+
+        self.send_request(request)?;
+
         recver.await?
     }
 
@@ -641,6 +687,17 @@ where
             Message::KeepAliveOpenSSH { want_reply } => {
                 self.handle_keep_alive(want_reply).await?;
             }
+            Message::ExtInfo(ext) => {
+                if let Some(ref mut behavior) = self.behaivor {
+                    for (name, value) in ext {
+                        if name == "server-sig-algs" {
+                            let value = std::str::from_utf8(&value)?;
+                            let algos = value.split(',').collect::<Vec<_>>();
+                            behavior.server_signature_algorithms(&algos).await?;
+                        }
+                    }
+                }
+            }
             msg => {
                 println!("msg :{:?} from server is ignore", msg);
             }
@@ -661,7 +718,7 @@ where
         }
         Ok(())
     }
-    
+
     #[allow(clippy::too_many_arguments)]
     async fn accpet_tcpip_forward(
         &mut self,
@@ -991,8 +1048,121 @@ where
 
                 let _ = sender.send(res);
             }
+            Request::UserauthKeyboardInteractive {
+                username,
+                submethods,
+                mut cb,
+                sender,
+            } => {
+                let res = self
+                    .userauth_keyboard_interactive(&username, &submethods, &mut cb)
+                    .await;
+                let _ = sender.send(res);
+            }
         }
         false
+    }
+
+    async fn userauth_keyboard_interactive(
+        &mut self,
+        username: &str,
+        submethods: &[String],
+        cb: &mut Box<dyn Interactive>,
+    ) -> Result<bool> {
+        let submethods = submethods.join(",");
+
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_USERAUTH_REQUEST,
+            one: username,
+            one: "ssh-connection"
+            one: "keyboard-interactive",
+            u32: 0,
+            one: submethods
+        };
+
+        self.stream.send_payload(buffer).await?;
+
+        fn parse(payload: &[u8]) -> Option<(&[u8], &[u8], Vec<(&[u8], bool)>)> {
+            let payload = Buffer::from_slice(payload);
+
+            let name = payload.take_one()?.1;
+            let instruction = payload.take_one()?.1;
+
+            let _ = payload.take_one()?.1; // tag
+
+            let num_prompts = payload.take_u32()?;
+
+            let mut prompts = vec![];
+
+            for _ in 0..num_prompts {
+                let prompt = payload.take_one()?.1;
+                let echo = payload.take_u8()? != 0;
+
+                prompts.push((prompt, echo));
+            }
+
+            Some((name, instruction, prompts))
+        }
+
+        let mut buffer = Buffer::with_capacity(128);
+        loop {
+            let packet = self.stream.recv_packet().await?;
+            if packet.payload.is_empty() {
+                return Err(Error::invalid_format("Invalid: empty payload"));
+            }
+            match packet.payload[0] {
+                SSH_MSG_USERAUTH_SUCCESS => {
+                    return Ok(true);
+                }
+
+                SSH_MSG_USERAUTH_FAILURE => {
+                    return Ok(false);
+                }
+                SSH_MSG_USERAUTH_INFO_REQUEST => {
+                    let Some((name, instruction, prompts)) = parse(&packet.payload[1..]) else {
+                        return Err(Error::invalid_format(
+                            "Invalid keyboard interactive request from server",
+                        ));
+                    };
+                    if prompts.is_empty() {
+                        buffer.put_u8(SSH_MSG_USERAUTH_INFO_RESPONSE);
+                        buffer.put_u32(0);
+                        self.stream.send_payload(&buffer).await?;
+                        buffer.clear();
+                    } else {
+                        let mut utf8_prompts = vec![];
+
+                        for (prompts, echo) in prompts {
+                            utf8_prompts.push((std::str::from_utf8(prompts)?, echo));
+                        }
+
+                        let response = cb
+                            .response(
+                                std::str::from_utf8(name)?,
+                                std::str::from_utf8(instruction)?,
+                                &utf8_prompts,
+                            )
+                            .await?;
+
+                        let num_res = response.len() as u32;
+
+                        buffer.put_u8(SSH_MSG_USERAUTH_INFO_RESPONSE);
+                        buffer.put_u32(num_res);
+
+                        for i in response {
+                            buffer.put_one(i);
+                        }
+
+                        self.stream.send_payload(&buffer).await?;
+                        buffer.clear();
+                    }
+                }
+                _ => {
+                    let msg = Message::parse(&packet.payload).map_err(Error::invalid_format)?;
+                    self.handle_msg(msg).await?;
+                }
+            }
+        }
     }
 
     async fn channel_pty_change_size(

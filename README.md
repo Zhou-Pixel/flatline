@@ -91,4 +91,6 @@ async fn main() {
 }
 ```
 
-> *flatline is beta now and can contain breaking changes!*
+> [!WARNING]
+> flatline is beta now and can contain breaking changes!
+>

@@ -75,4 +75,5 @@ pub use cipher::{
     Boxtory, Factory,
 };
 pub use openssl;
+pub use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};

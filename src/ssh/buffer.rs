@@ -103,7 +103,7 @@ impl<I, T: IndexMut<I>> IndexMut<I> for Buffer<T> {
     }
 }
 
-impl Buffer<Cell<&[u8]>> {
+impl<'a> Buffer<Cell<&'a [u8]>> {
     pub fn from_slice(slice: &[u8]) -> Buffer<Cell<&[u8]>> {
         Buffer(Cell::new(slice))
     }
@@ -146,7 +146,7 @@ impl Buffer<Cell<&[u8]>> {
         }
     }
 
-    pub fn take_bytes(&self, len: usize) -> Option<&[u8]> {
+    pub fn take_bytes(&self, len: usize) -> Option<&'a [u8]> {
         if self.0.get().len() < len {
             None
         } else {
@@ -156,7 +156,7 @@ impl Buffer<Cell<&[u8]>> {
         }
     }
 
-    pub fn take_one(&self) -> Option<(u32, &[u8])> {
+    pub fn take_one(&self) -> Option<(u32, &'a [u8])> {
         let tmp = self.0.get();
 
         let len = match self.take_u32() {

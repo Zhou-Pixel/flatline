@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::channel::{Channel, ChannelOpenFailureReson, Signal};
 use super::error::Result;
 use super::session::{DisconnectReson, Userauth};
@@ -6,6 +8,7 @@ use super::ssh::common::code::*;
 use super::OSender;
 use crate::channel::TerminalMode;
 use crate::forward::Listener;
+use crate::session::Interactive;
 use crate::ssh::buffer::Buffer;
 
 pub(crate) enum Request {
@@ -29,6 +32,12 @@ pub(crate) enum Request {
     UserauthNone {
         username: String,
         sender: OSender<Result<Userauth>>,
+    },
+    UserauthKeyboardInteractive {
+        username: String,
+        submethods: Vec<String>,
+        cb: Box<dyn Interactive>,
+        sender: OSender<Result<bool>>
     },
     ChannelOpenSession {
         initial: u32,
@@ -208,14 +217,14 @@ pub(crate) enum Message {
         originator_address: String, // originator IP address
         originator_port: u32,       // originator port
     },
-    // ExtInfo(HashMap<String, Vec<u8>>)
+    ExtInfo(HashMap<String, Vec<u8>>)
 }
 
 impl Message {
     pub fn parse(payload: &[u8]) -> std::result::Result<Self, String> {
         let buffer = Buffer::from_slice(payload);
 
-        let mut detail = "unable to parse a server message".to_string();
+        let mut detail = "Unable to parse a server message".to_string();
 
         let mut func = || {
             let mut utf8 = |data: &[u8]| {
@@ -223,7 +232,7 @@ impl Message {
                 match str {
                     Ok(str) => Some(str),
                     Err(_) => {
-                        detail = "unable to parse string as utf8".to_string();
+                        detail = "Unable to parse string as utf8".to_string();
                         None
                     }
                 }
@@ -295,7 +304,7 @@ impl Message {
                     } else if line == b"keepalive@openssh.com" {
                         Some(Self::KeepAliveOpenSSH { want_reply: buffer.take_u8()? != 0 })
                     } else {
-                        detail = format!("unknown global reqeust: {:?}", utf8(line)?);
+                        detail = format!("Unknown global reqeust: {:?}", utf8(line)?);
                         // Err(Error::ssh_packet_parse(format!(
                         //     "unknown global reqeust: {:?}",
                         //     String::from_utf8(line)?
@@ -317,7 +326,7 @@ impl Message {
                     if code == SSH_EXTENDED_DATA_STDERR {
                         Some(Self::ChannelStderrData { recipient, data })
                     } else {
-                        detail = format!("unknow data type code: {code}");
+                        detail = format!("Unknow data type code: {code}");
                         // Err(Error::ssh_packet_parse(format!(
                         //     "unknow data type code: {code}"
                         // )))
@@ -343,7 +352,7 @@ impl Message {
                     if service == b"ssh-userauth" {
                         Some(Self::UserauthServiceAccept)
                     } else {
-                        detail = "unknown service name".to_string();
+                        detail = "Unknown service name".to_string();
                         None
                     }
                 }
@@ -455,6 +464,19 @@ impl Message {
                         detail = "Unimplemented".to_string();
                         None
                     }
+                }
+                SSH_MSG_EXT_INFO => {
+                    let nr_extensions = buffer.take_u32()?;
+
+                    let mut map = HashMap::new();
+                    for _ in 0..nr_extensions {
+                        let name = buffer.take_one()?.1;
+                        let value = buffer.take_one()?.1;
+                        map.insert(utf8(name)?.to_string(), value.to_vec());
+                    }
+
+                    Some(Self::ExtInfo(map))
+                    
                 }
                 _ => {
                     detail = format!("unknown code: {code} datalen: {}", buffer.len());
