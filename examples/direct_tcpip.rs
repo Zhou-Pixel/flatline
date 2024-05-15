@@ -14,7 +14,6 @@ async fn main() {
     let config = Config::deafult_with_behavior();
     let session = Session::handshake(config, socket).await.unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     let private = fs::read(PRI_KEY_FILE).await.unwrap();
     let public = fs::read(PUB_KEY_FILE).await.unwrap();
     let status = session
