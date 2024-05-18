@@ -633,6 +633,10 @@ impl SFtp {
     }
 
     pub async fn posix_rename(&mut self, oldpath: &str, newpath: &str) -> Result<()> {
+        debug_assert!(
+            self.support_posix_rename(),
+            "Server doesn't support posix rename"
+        );
         // let mut buffer = Buffer::new();
 
         let request_id = self.genarate_request_id();

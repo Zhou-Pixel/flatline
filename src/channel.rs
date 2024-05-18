@@ -118,54 +118,6 @@ pub struct Stream {
     eof: bool,
 }
 
-// struct BufferChannel {
-
-//     channel: Channel,
-
-//     stdout: BytesMut,
-
-//     stderr: BytesMut,
-
-//     stdin: BytesMut,
-
-//     closed: bool,
-
-//     eof: bool,
-// }
-
-// impl BufferChannel {
-//     async fn read_exact(&mut self, len: usize) -> Result<Vec<u8>> {
-//         if self.stdout.len() < len {
-//             if self.closed {
-//                 return Err(Error::ChannelClosed);
-//             }
-//             if self.eof {
-//                 return Err(Error::ChannelEof);
-//             }
-
-//         }
-//         while self.stdout.len() < len {
-//             let msg = self.channel.recv().await?;
-//             match msg {
-//                 Message::Close => {
-//                     self.closed = true;
-//                     return Err(Error::ChannelClosed)
-//                 },
-//                 Message::Eof => {
-//                     self.eof = true;
-//                     return Err(Error::ChannelEof)
-//                 },
-//                 Message::Stdout(data) => self.stdout.extend(data),
-//                 Message::Stderr(data) => self.stderr.extend(data),
-//                 Message::Exit(_) => continue,
-//             }
-//         }
-
-//         Ok(self.stdout.split_to(len).to_vec())
-//     }
-
-// }
-
 impl Stream {
     pub fn new(channel: Channel) -> Self {
         Self {
@@ -197,13 +149,31 @@ impl AsyncWrite for Stream {
 
             self.write_future = unsafe { transmute(Some(future)) };
         }
-        let res = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
-        self.write_future = None;
+        // we can't return Ok(0) here because Ok(0) means error in tokio::io::copy_bidirectional;
+        loop {
+            let res = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
+            self.write_future = None;
+            match res {
+                Ok(0) => {
+                    let future = async {
+                        tokio::task::yield_now().await;
+                        self.channel.write(buf).await
+                    };
+                    let future: BoxFuture<'_, Result<usize>> = Box::pin(future);
 
-        Poll::Ready(match res {
-            Ok(size) => Ok(size),
-            Err(err) => Err(io::Error::new(io::ErrorKind::Other, Box::new(err))),
-        })
+                    self.write_future = unsafe { transmute(Some(future)) };
+                }
+                Ok(size) => break Poll::Ready(Ok(size)),
+                Err(err) => {
+                    break Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, Box::new(err))))
+                }
+            }
+        }
+
+        // Poll::Ready(match res {
+        //     Ok(size) => Ok(size),
+        //     Err(err) => Err(io::Error::new(io::ErrorKind::Other, Box::new(err))),
+        // })
     }
 
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -382,74 +352,6 @@ pub enum TerminalMode {
     #[allow(non_camel_case_types)]
     TTY_OP_OSPEED = 129,
 }
-
-// impl ToString for TerminalMode {
-//     fn to_string(&self) -> String {
-//         self.to_str().to_string()
-//     }
-// }
-
-// impl TerminalMode {
-//     fn to_str(&self) -> &str {
-//         match self {
-//             // TerminalMode::TTY_OP_END => "TTY_OP_END",
-//             TerminalMode::VINTR => "VINTR",
-//             TerminalMode::VERASE => "VERASE",
-//             TerminalMode::VKILL => "VKILL",
-//             TerminalMode::VEOF => "VEOF",
-//             TerminalMode::VEOL => "VEOL",
-//             TerminalMode::VEOL2 => "VEOL2",
-//             TerminalMode::VSTART => "VSTART",
-//             TerminalMode::VSTOP => "VSTOP",
-//             TerminalMode::VSUSP => "VSUSP",
-//             TerminalMode::VDSUSP => "VDSUSP",
-//             TerminalMode::VREPRINT => "VREPRINT",
-//             TerminalMode::VWERASE => "VWERASE",
-//             TerminalMode::VLNEXT => "VLNEXT",
-//             TerminalMode::VFLUSH => "VFLUSH",
-//             TerminalMode::VSWTCH => "VSWTCH",
-//             TerminalMode::VSTATUS => "VSTATUS",
-//             TerminalMode::VDISCARD => "VDISCARD",
-//             TerminalMode::IGNPAR => "IGNPAR",
-//             TerminalMode::PARMRK => "PARMRK",
-//             TerminalMode::INPCK => "INPCK",
-//             TerminalMode::ISTRIP => "ISTRIP",
-//             TerminalMode::INLCR => "INLCR",
-//             TerminalMode::IGNCR => "IGNCR",
-//             TerminalMode::ICRNL => "ICRNL",
-//             TerminalMode::IUCLC => "IUCLC",
-//             TerminalMode::IXON => "IXON",
-//             TerminalMode::IXANY => "IXANY",
-//             TerminalMode::IXOFF => "IXOFF",
-//             TerminalMode::IMAXBEL => "IMAXBEL",
-//             TerminalMode::ISIG => "ISIG",
-//             TerminalMode::ICANON => "ICANON",
-//             TerminalMode::XCASE => "XCASE",
-//             TerminalMode::ECHO => "ECHO",
-//             TerminalMode::ECHOE => "ECHOE",
-//             TerminalMode::ECHOK => "ECHOK",
-//             TerminalMode::ECHONL => "ECHONL",
-//             TerminalMode::NOFLSH => "NOFLSH",
-//             TerminalMode::TOSTOP => "TOSTOP",
-//             TerminalMode::IEXTEN => "IEXTEN",
-//             TerminalMode::ECHOCTL => "ECHOCTL",
-//             TerminalMode::ECHOKE => "ECHOKE",
-//             TerminalMode::PENDIN => "PENDIN",
-//             TerminalMode::OPOST => "OPOST",
-//             TerminalMode::OLCUC => "OLCUC",
-//             TerminalMode::ONLCR => "ONLCR",
-//             TerminalMode::OCRNL => "OCRNL",
-//             TerminalMode::ONOCR => "ONOCR",
-//             TerminalMode::ONLRET => "ONLRET",
-//             TerminalMode::CS7 => "CS7",
-//             TerminalMode::CS8 => "CS8",
-//             TerminalMode::PARENB => "PARENB",
-//             TerminalMode::PARODD => "PARODD",
-//             TerminalMode::TTY_OP_ISPEED => "TTY_OP_ISPEED",
-//             TerminalMode::TTY_OP_OSPEED => "TTY_OP_OSPEED",
-//         }
-//     }
-// }
 
 pub(crate) struct BufferChannel {
     channel: Channel,
@@ -741,6 +643,42 @@ impl Channel {
 
         self.send_request(request)?;
         recver.await?
+    }
+
+    pub async fn request_x11_forward(
+        &mut self,
+        single_connection: bool,
+        protocol: impl Into<String>,
+        cookie: impl Into<String>,
+        screen_number: u32,
+    ) -> Result<()> {
+        let (sender, recver) = o_channel();
+
+        let request = Request::X11Forward {
+            id: self.id,
+            single_connection,
+            protocol: protocol.into(),
+            cookie: cookie.into(),
+            screen_number,
+            sender,
+        };
+
+        self.send_request(request)?;
+
+        recver.await?
+    }
+
+    pub async fn xon_xoff(&self, allow: bool) -> Result<()> {
+        let (sender, recvr) = o_channel();
+        let request = Request::XonXoff {
+            id: self.id,
+            allow,
+            sender,
+        };
+
+        self.send_request(request)?;
+
+        recvr.await?
     }
 
     fn send_request(&self, msg: Request) -> Result<()> {

@@ -11,15 +11,18 @@ use crate::forward::Listener;
 use crate::session::Interactive;
 use crate::ssh::buffer::Buffer;
 
+#[derive(custom_debug_derive::Debug)]
 pub(crate) enum Request {
     SessionDrop {
         reson: DisconnectReson,
         desc: String,
+        #[debug(skip)]
         sender: Option<OSender<Result<()>>>,
     },
     UserAuthPassWord {
         username: String,
         password: String,
+        #[debug(skip)]
         sender: OSender<Result<Userauth>>,
     },
     UserauthPublickey {
@@ -27,26 +30,32 @@ pub(crate) enum Request {
         method: String,
         publickey: Vec<u8>,
         privatekey: Vec<u8>,
+        #[debug(skip)]
         sender: OSender<Result<Userauth>>,
     },
     UserauthNone {
         username: String,
+        #[debug(skip)]
         sender: OSender<Result<Userauth>>,
     },
     UserauthKeyboardInteractive {
         username: String,
         submethods: Vec<String>,
+        #[debug(skip)]
         cb: Box<dyn Interactive>,
-        sender: OSender<Result<bool>>
+        #[debug(skip)]
+        sender: OSender<Result<bool>>,
     },
     ChannelOpenSession {
         initial: u32,
         maximum: u32,
+        #[debug(skip)]
         sender: OSender<Result<Channel>>,
     },
     ChannelExec {
         id: u32,
         cmd: String,
+        #[debug(skip)]
         sender: OSender<Result<()>>,
     },
     TcpipForward {
@@ -54,11 +63,13 @@ pub(crate) enum Request {
         port: u32,
         initial: u32,
         maximum: u32,
+        #[debug(skip)]
         sender: OSender<Result<Listener>>,
     },
     CancelTcpipForward {
         address: String,
         port: u32,
+        #[debug(skip)]
         sender: Option<OSender<Result<()>>>,
     },
     DirectTcpip {
@@ -66,6 +77,7 @@ pub(crate) enum Request {
         maximum: u32,
         remote: (String, u32),
         local: (String, u32),
+        #[debug(skip)]
         sender: OSender<Result<Channel>>,
     },
     // ChannelExecWait {
@@ -79,30 +91,37 @@ pub(crate) enum Request {
     // },
     ChannelDrop {
         id: u32,
+        #[debug(skip)]
         sender: Option<OSender<Result<()>>>,
     },
     ChannelWriteStdout {
         id: u32,
+        #[debug(skip)]
         data: Vec<u8>,
+        #[debug(skip)]
         sender: OSender<Result<usize>>,
     },
     ChannelSetEnv {
         id: u32,
         name: String,
         value: Vec<u8>,
+        #[debug(skip)]
         sender: OSender<Result<()>>,
     },
     ChannelSendSignal {
         id: u32,
         signal: Signal,
+        #[debug(skip)]
         sender: OSender<Result<()>>,
     },
     ChannelEof {
         id: u32,
+        #[debug(skip)]
         sender: OSender<Result<()>>,
     },
     ChannelReuqestShell {
         id: u32,
+        #[debug(skip)]
         sender: OSender<Result<()>>,
     },
     ChannelRequestPty {
@@ -113,6 +132,7 @@ pub(crate) enum Request {
         width: u32,
         height: u32,
         terimal_modes: Vec<(TerminalMode, u32)>,
+        #[debug(skip)]
         sender: OSender<Result<()>>,
     },
     ChannelPtyChangeSize {
@@ -121,16 +141,35 @@ pub(crate) enum Request {
         rows: u32,
         width: u32,
         height: u32,
+        #[debug(skip)]
         sender: OSender<Result<()>>,
     },
     SFtpFromChannel {
+        #[debug(skip)]
         channel: Channel,
+        #[debug(skip)]
         sender: OSender<Result<SFtp>>,
     },
     SFtpOpen {
         initial: u32,
         maximum: u32,
+        #[debug(skip)]
         sender: OSender<Result<SFtp>>,
+    },
+    X11Forward {
+        id: u32,
+        single_connection: bool,
+        protocol: String,
+        cookie: String,
+        screen_number: u32,
+        #[debug(skip)]
+        sender: OSender<Result<()>>,
+    },
+    XonXoff {
+        id: u32,
+        allow: bool,
+        #[debug(skip)]
+        sender: OSender<Result<()>>,
     },
 }
 
@@ -205,7 +244,11 @@ pub(crate) enum Message {
     },
     Ignore(Vec<u8>),
     Ping(Vec<u8>),
-    KeepAliveOpenSSH {
+    GlobalKeepAliveOpenSSH {
+        want_reply: bool,
+    },
+    ChannelKeepAliveOpenSSH {
+        recipient: u32,
         want_reply: bool,
     },
     ForwardTcpIp {
@@ -217,7 +260,14 @@ pub(crate) enum Message {
         originator_address: String, // originator IP address
         originator_port: u32,       // originator port
     },
-    ExtInfo(HashMap<String, Vec<u8>>)
+    X11Forward {
+        sender: u32,
+        initial: u32,
+        maximum: u32,
+        address: String,
+        port: u32,
+    },
+    ExtInfo(HashMap<String, Vec<u8>>),
 }
 
 impl Message {
@@ -302,7 +352,9 @@ impl Message {
                             hostkeys,
                         })
                     } else if line == b"keepalive@openssh.com" {
-                        Some(Self::KeepAliveOpenSSH { want_reply: buffer.take_u8()? != 0 })
+                        Some(Self::GlobalKeepAliveOpenSSH {
+                            want_reply: buffer.take_u8()? != 0,
+                        })
                     } else {
                         detail = format!("Unknown global reqeust: {:?}", utf8(line)?);
                         // Err(Error::ssh_packet_parse(format!(
@@ -361,7 +413,7 @@ impl Message {
 
                     let (_, string) = buffer.take_one()?;
 
-                    let _ = buffer.take_u8()?;
+                    let want_reply = buffer.take_u8()? != 0;
 
                     if string == b"exit-status" {
                         let code = buffer.take_u32()?;
@@ -387,8 +439,13 @@ impl Message {
                             error_msg,
                             tag,
                         })
+                    } else if string == b"keepalive@openssh.com" {
+                        Some(Self::ChannelKeepAliveOpenSSH {
+                            recipient,
+                            want_reply,
+                        })
                     } else {
-                        detail = "unimplemented".to_string();
+                        detail = format!("Unimplement: {}", String::from_utf8_lossy(string));
                         None
                     }
                 }
@@ -460,6 +517,22 @@ impl Message {
                             originator_address: o_address,
                             originator_port: o_port,
                         })
+                    } else if cmd == b"x11" {
+                        let sender = buffer.take_u32()?;
+                        let initial = buffer.take_u32()?;
+                        let maximum = buffer.take_u32()?;
+                        let address = buffer.take_one()?.1;
+                        let port = buffer.take_u32()?;
+
+                        let address = utf8(address)?;
+
+                        Some(Self::X11Forward {
+                            sender,
+                            initial,
+                            maximum,
+                            address,
+                            port,
+                        })
                     } else {
                         detail = "Unimplemented".to_string();
                         None
@@ -472,11 +545,10 @@ impl Message {
                     for _ in 0..nr_extensions {
                         let name = buffer.take_one()?.1;
                         let value = buffer.take_one()?.1;
-                        map.insert(utf8(name)?.to_string(), value.to_vec());
+                        map.insert(utf8(name)?, value.to_vec());
                     }
 
                     Some(Self::ExtInfo(map))
-                    
                 }
                 _ => {
                     detail = format!("unknown code: {code} datalen: {}", buffer.len());

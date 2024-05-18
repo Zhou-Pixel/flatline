@@ -2,6 +2,7 @@ use super::cipher::hash::Hash;
 use super::cipher::kex::Summary as DHSumary;
 use super::cipher::Boxtory;
 use super::error::{Error, Result};
+use super::forward::Stream as ForwardStream;
 use super::session::DisconnectReson;
 use super::ssh::common::*;
 use super::ssh::stream::{BufferStream, Stream};
@@ -70,6 +71,7 @@ pub trait Behavior {
     async fn disconnect(&mut self, reson: DisconnectReson, dest: &str, tag: &str) -> Result<()>;
     async fn verify_server_hostkey(&mut self, keytype: &str, hostkeys: &[u8]) -> Result<bool>;
     async fn server_signature_algorithms(&mut self, algorithms: &[&str]) -> Result<()>;
+    async fn x11_forward(&mut self, stream: ForwardStream) -> Result<()>;
 }
 
 impl Config<DefaultBehavior> {
@@ -122,6 +124,10 @@ impl Behavior for DefaultBehavior {
         Ok(())
     }
 
+    async fn useauth_banner(&mut self, _: &str, _: &str) -> Result<()> {
+        Ok(())
+    }
+
     async fn disconnect(&mut self, _: DisconnectReson, _: &str, _: &str) -> Result<()> {
         Ok(())
     }
@@ -130,11 +136,11 @@ impl Behavior for DefaultBehavior {
         Ok(true)
     }
 
-    async fn useauth_banner(&mut self, _: &str, _: &str) -> Result<()> {
+    async fn server_signature_algorithms(&mut self, _: &[&str]) -> Result<()> {
         Ok(())
     }
 
-    async fn server_signature_algorithms(&mut self, _: &[&str]) -> Result<()> {
+    async fn x11_forward(&mut self, _: ForwardStream) -> Result<()> {
         Ok(())
     }
 }
@@ -175,6 +181,33 @@ impl<B> Config<B> {
             .insert("none".to_string(), compress::none_encode());
         self.compress_server_to_client
             .insert("none".to_string(), compress::none_decode());
+    }
+
+    pub fn new(behaviour: B) -> Self {
+        fn convert<K: ToString, V>(value: IndexMap<K, V>) -> IndexMap<String, V> {
+            value.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+        }
+
+        let banner = format!(
+            "SSH-2.0-{}_{}\r\n",
+            project::PROJECT_NAME,
+            project::PROJECT_VERSION
+        );
+
+        Self {
+            banner,
+            key_exchange: convert(kex::new_all()),
+            hostkey: convert(sign::new_verify_all()),
+            crypt_server_to_client: convert(crypt::new_decrypt_all()),
+            crypt_client_to_server: convert(crypt::new_encrypt_all()),
+            mac_client_to_server: convert(mac::new_all()),
+            mac_server_to_client: convert(mac::new_all()),
+            compress_client_to_server: convert(compress::new_encode_all()),
+            compress_server_to_client: convert(compress::new_decode_all()),
+            key_strict: true,
+            behavior: Some(behaviour),
+            ext: false,
+        }
     }
 }
 

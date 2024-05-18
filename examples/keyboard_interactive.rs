@@ -3,12 +3,11 @@ use flatline::error::Result;
 use flatline::handshake::Config;
 use flatline::session::Interactive;
 use flatline::session::Session;
+use tokio::io::stdin;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
-use tokio::io::stdin;
 
 include!("./user.conf");
-
 
 /// # add to /etc/ssh/sshd_config and restart ssh-server if you were using openssh
 /// KbdInteractiveAuthentication yes

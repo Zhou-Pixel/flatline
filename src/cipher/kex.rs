@@ -1037,7 +1037,7 @@ impl Curve25519 {
 impl KeyExChange for Curve25519 {
     async fn kex(&self, config: Dependency, stream: &mut dyn Stream) -> Result<Summary> {
         let mut ctx = PkeyCtx::new_id(Id::X25519)?;
-        
+
         ctx.keygen_init()?;
 
         let private = ctx.keygen()?;

@@ -11,7 +11,6 @@ mod project;
 pub mod scp;
 pub mod session;
 pub mod sftp;
-pub mod x11;
 
 #[cfg(test)]
 mod test;
@@ -65,6 +64,7 @@ fn o_channel<T>() -> (OSender<T>, OReceiver<T>) {
 
 use std::{future::Future, pin::Pin};
 
+pub use async_trait::async_trait;
 pub use cipher::{
     compress::{Decode, Encode},
     crypt::{Decrypt, Encrypt},
@@ -75,5 +75,4 @@ pub use cipher::{
     Boxtory, Factory,
 };
 pub use openssl;
-pub use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};

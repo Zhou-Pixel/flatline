@@ -370,7 +370,7 @@ impl Session {
         let (sender, recver) = o_channel();
         let request = Request::UserauthKeyboardInteractive {
             username: username.into(),
-            submethods: prefer.into_iter().map(|v| v.to_string()).collect(),
+            submethods: prefer.iter().map(|v| v.to_string()).collect(),
             cb: Box::new(cb),
             sender,
         };
@@ -684,8 +684,8 @@ where
                 )
                 .await?;
             }
-            Message::KeepAliveOpenSSH { want_reply } => {
-                self.handle_keep_alive(want_reply).await?;
+            Message::GlobalKeepAliveOpenSSH { want_reply } => {
+                self.handle_global_keep_alive(want_reply).await?;
             }
             Message::ExtInfo(ext) => {
                 if let Some(ref mut behavior) = self.behaivor {
@@ -697,6 +697,23 @@ where
                         }
                     }
                 }
+            }
+            Message::X11Forward {
+                sender,
+                initial,
+                maximum,
+                address,
+                port,
+            } => {
+                self.handle_x11_forward(sender, initial, maximum, address, port)
+                    .await?;
+            }
+            Message::ChannelKeepAliveOpenSSH {
+                recipient,
+                want_reply,
+            } => {
+                self.handle_channel_keep_alive(want_reply, recipient)
+                    .await?;
             }
             msg => {
                 println!("msg :{:?} from server is ignore", msg);
@@ -712,10 +729,76 @@ where
             .ok_or(Error::ub("Session has been dropped"))
     }
 
-    async fn handle_keep_alive(&mut self, want_reply: bool) -> Result<()> {
+    async fn handle_channel_keep_alive(&mut self, want_reply: bool, recipient: u32) -> Result<()> {
+        if want_reply {
+            if let Ok(id) = self.get_server_channel_id(recipient) {
+                let buffer = make_buffer_without_header! {
+                    u8: SSH_MSG_CHANNEL_SUCCESS,
+                    u32: id,
+                };
+                self.stream.send_payload(buffer).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_global_keep_alive(&mut self, want_reply: bool) -> Result<()> {
         if want_reply {
             self.stream.send_payload(&[SSH_MSG_REQUEST_SUCCESS]).await?;
         }
+        Ok(())
+    }
+
+    async fn handle_x11_forward(
+        &mut self,
+        sender: u32,
+        initial: u32,
+        maximum: u32,
+        originator_address: String,
+        originator_port: u32,
+    ) -> Result<()> {
+        let session = self.upgrade_sender()?;
+        let client_id = self.genarate_channel_id();
+        if let Some(ref mut behavior) = self.behaivor {
+            let buffer = make_buffer_without_header! {
+                u8: SSH_MSG_CHANNEL_OPEN_CONFIRMATION,
+                u32: sender,
+                u32: client_id,
+                u32: 1024 * 1024,
+                u32: 32768
+            };
+
+            let (tx, rx) = m_channel();
+
+            self.stream.send_payload(buffer).await?;
+
+            let channel = Channel::new(client_id, rx, session);
+            use super::channel::Endpoint as ChannelEp;
+
+            let inner = ChannelInner::new(
+                ChannelEp::new(client_id, 1024 * 1024, 32768),
+                ChannelEp::new(sender, initial, maximum),
+                tx,
+            );
+
+            self.channels.insert(client_id, inner);
+
+            let socket = Stream::new(channel, originator_address, originator_port);
+
+            behavior.x11_forward(socket).await?;
+        } else {
+            let buffer = make_buffer_without_header! {
+                u8: SSH_MSG_CHANNEL_OPEN_FAILURE,
+                u32: sender,
+                u32: ChannelOpenFailureReson::UNKNOWN_CHANNELTYPE.0,
+                one: "ignore x11 forward",
+                u32: 0
+            };
+
+            self.stream.send_payload(buffer).await?;
+        }
+
         Ok(())
     }
 
@@ -1059,8 +1142,73 @@ where
                     .await;
                 let _ = sender.send(res);
             }
+            Request::X11Forward {
+                id,
+                single_connection,
+                protocol,
+                cookie,
+                screen_number,
+                sender,
+            } => {
+                let res = self
+                    .channel_x11_forward(id, single_connection, &protocol, &cookie, screen_number)
+                    .await;
+                let _ = sender.send(res);
+            }
+            Request::XonXoff { id, allow, sender } => {
+                let res = self.channel_xon_xoff(id, allow).await;
+
+                let _ = sender.send(res);
+            }
         }
         false
+    }
+
+    async fn channel_xon_xoff(&mut self, id: u32, allow: bool) -> Result<()> {
+        let recipient = self.get_server_channel_id(id)?;
+
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_REQUEST,
+            u32: recipient,
+            one: "xon-xoff",
+            u8: 0,
+            u8: allow as u8,
+        };
+
+        self.stream.send_payload(buffer).await
+    }
+
+    async fn channel_x11_forward(
+        &mut self,
+        id: u32,
+        single_connection: bool,
+        protocol: &str,
+        cookie: &str,
+        screen_number: u32,
+    ) -> Result<()> {
+        let recipient = self.get_server_channel_id(id)?;
+
+        let buffer = make_buffer_without_header! {
+            u8: SSH_MSG_CHANNEL_REQUEST,
+            u32: recipient,
+            one: "x11-req",
+            u8: 1,
+            u8: single_connection as u8,
+            one: protocol,
+            one: cookie,
+            u32: screen_number
+        };
+
+        self.stream.send_payload(buffer).await?;
+
+        channel_loop!(
+            self,
+            id,
+            Message::ChannelSuccess(recipient) if recipient == id => return Ok(()),
+            Message::ChannelFailure(recipient) if recipient == id => {
+                return Err(Error::ChannelFailure);
+            },
+        );
     }
 
     async fn userauth_keyboard_interactive(
