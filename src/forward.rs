@@ -5,6 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use derive_new::new;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{channel::Channel, msg::Request};
@@ -15,10 +16,15 @@ use crate::{
 
 use super::{o_channel, MReceiver, MSender};
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
+pub struct SocketAddr {
+    pub host: String,
+    pub port: u32,
+}
+
 pub struct Stream {
     channel: ChannelStream,
-    address: String,
-    port: u32,
+    address: SocketAddr,
 }
 
 use std::result::Result as StdResult;
@@ -65,35 +71,34 @@ impl AsyncWrite for Stream {
 }
 
 impl Stream {
-    pub(crate) fn new(channel: Channel, address: impl Into<String>, port: u32) -> Self {
+    pub(crate) fn new(channel: Channel, address: SocketAddr) -> Self {
         Self {
             channel: ChannelStream::new(channel),
-            address: address.into(),
-            port,
+            address,
         }
     }
 
-    pub fn address(&self) -> &str {
-        &self.address
+    pub async fn close(self) -> Result<()> {
+        self.channel.close().await
     }
 
-    pub fn port(&self) -> u32 {
-        self.port
+    pub fn address(&self) -> &SocketAddr {
+        &self.address
     }
 }
 
 pub struct Listener {
     session: ManuallyDrop<MSender<Request>>,
     recver: ManuallyDrop<MReceiver<Stream>>,
-    address: ManuallyDrop<String>,
-    port: u32,
+    address: ManuallyDrop<SocketAddr>,
+    // port: u32,
 }
 
 impl Drop for Listener {
     fn drop(&mut self) {
         let _ = self.session.send(Request::CancelTcpipForward {
             address: (*self.address).clone(),
-            port: self.port,
+            // port: self.port,
             sender: None,
         });
 
@@ -105,14 +110,14 @@ impl Listener {
     pub(crate) fn new(
         session: MSender<Request>,
         recver: MReceiver<Stream>,
-        address: String,
-        port: u32,
+        address: SocketAddr,
+        // port: u32,
     ) -> Self {
         Self {
             session: ManuallyDrop::new(session),
             recver: ManuallyDrop::new(recver),
             address: ManuallyDrop::new(address),
-            port,
+            // port,
         }
     }
 
@@ -132,7 +137,7 @@ impl Listener {
         let (sender, recver) = o_channel();
         let request = Request::CancelTcpipForward {
             address: (*self.address).clone(),
-            port: self.port,
+            // port: self.port,
             sender: Some(sender),
         };
 
@@ -147,11 +152,11 @@ impl Listener {
         recver.await.map_err(|_| Error::Disconnected)?
     }
 
-    pub fn listen_port(&self) -> u32 {
-        self.port
-    }
+    // pub fn listen_port(&self) -> u32 {
+    //     self.port
+    // }
 
-    pub fn listen_address(&self) -> &str {
+    pub fn listen_address(&self) -> &SocketAddr {
         &self.address
     }
 }

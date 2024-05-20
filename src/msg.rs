@@ -7,7 +7,7 @@ use super::sftp::SFtp;
 use super::ssh::common::code::*;
 use super::OSender;
 use crate::channel::TerminalMode;
-use crate::forward::Listener;
+use crate::forward::{Listener, SocketAddr};
 use crate::session::Interactive;
 use crate::ssh::buffer::Buffer;
 
@@ -59,24 +59,24 @@ pub(crate) enum Request {
         sender: OSender<Result<()>>,
     },
     TcpipForward {
-        address: String,
-        port: u32,
+        address: SocketAddr,
+        // port: u32,
         initial: u32,
         maximum: u32,
         #[debug(skip)]
         sender: OSender<Result<Listener>>,
     },
     CancelTcpipForward {
-        address: String,
-        port: u32,
+        address: SocketAddr,
+        // port: u32,
         #[debug(skip)]
         sender: Option<OSender<Result<()>>>,
     },
     DirectTcpip {
         initial: u32,
         maximum: u32,
-        remote: (String, u32),
-        local: (String, u32),
+        remote: SocketAddr,
+        local: SocketAddr,
         #[debug(skip)]
         sender: OSender<Result<Channel>>,
     },

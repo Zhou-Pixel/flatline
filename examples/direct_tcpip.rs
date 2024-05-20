@@ -1,3 +1,4 @@
+use flatline::forward::SocketAddr;
 use flatline::handshake::Config;
 use flatline::session::Session;
 use flatline::session::Userauth;
@@ -5,6 +6,7 @@ use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::watch;
 
 include!("./user.conf");
 
@@ -27,6 +29,8 @@ async fn main() {
 
     println!("press enter to exit");
     let mut stdin = tokio::io::stdin();
+    let mut handles = vec![];
+    let (sender, recver) = watch::channel(());
     loop {
         tokio::select! {
             res = listener.accept() => {
@@ -34,25 +38,36 @@ async fn main() {
                 let local_addr = local.peer_addr().unwrap();
                 let mut remote = session
                     .direct_tcpip_default(
-                        ("127.0.0.1", 5000),
-                        (local_addr.ip().to_string(), local_addr.port() as u32),
+                        SocketAddr::new("127.0.0.1".to_string(), 5000),
+                        SocketAddr::new(local_addr.ip().to_string(), local_addr.port() as u32),
                     )
                     .await
                     .unwrap();
+                    let mut recver = recver.clone();
+                handles.push(tokio::spawn(async move {
+                    tokio::select! {
+                        _ = recver.changed() => {
 
-                tokio::spawn(async move {
-                    tokio::io::copy_bidirectional(&mut local, &mut remote)
-                        .await
-                        .unwrap();
-                });
+                        }
+                        _ = tokio::io::copy_bidirectional(&mut local, &mut remote) => {
+
+                        }
+                    };
+
+                    remote.close().await.unwrap();
+
+                }));
 
             }
 
             _ = stdin.read_u8() => {
+                let _ = sender.send(());
                 break;
             }
         }
     }
-
+    for i in handles {
+        tokio::join!(i).0.unwrap();
+    }
     session.disconnect_default().await.unwrap();
 }

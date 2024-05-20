@@ -17,7 +17,7 @@ use crate::cipher::sign;
 use crate::error::Error;
 use crate::error::Result;
 use crate::forward::Listener;
-use crate::forward::Stream;
+use crate::forward::{SocketAddr, Stream};
 
 use super::channel::Message as ChannelMsg;
 use crate::handshake::Behavior;
@@ -154,8 +154,8 @@ impl Session {
     #[inline]
     pub async fn direct_tcpip_default(
         &self,
-        remote: (impl Into<String>, u32),
-        local: (impl Into<String>, u32),
+        remote: SocketAddr,
+        local: SocketAddr,
     ) -> Result<Stream> {
         self.direct_tcpip(2 * 1024 * 1024, 32000, remote, local)
             .await
@@ -165,44 +165,43 @@ impl Session {
         &self,
         initial: u32,
         maximum: u32,
-        remote: (impl Into<String>, u32),
-        local: (impl Into<String>, u32),
+        remote: SocketAddr,
+        local: SocketAddr,
     ) -> Result<Stream> {
         let (sender, recver) = o_channel();
-        let address: String = remote.0.into();
+        let address = remote.clone();
         self.send_request(Request::DirectTcpip {
             initial,
             maximum,
-            remote: (address.clone(), remote.1),
-            local: (local.0.into(), local.1),
+            remote,
+            local,
             sender,
         })?;
         let channel = recver.await??;
 
-        Ok(Stream::new(channel, address, remote.1))
+        Ok(Stream::new(channel, address))
     }
 
     pub async fn tcpip_forward_default(
         &self,
-        address: impl Into<String>,
-        port: u32,
+        address: SocketAddr,
+        // port: u32,
     ) -> Result<Listener> {
-        self.tcpip_forward(address, port, 2 * 1024 * 1024, 3200)
-            .await
+        self.tcpip_forward(address, 2 * 1024 * 1024, 3200).await
     }
 
     #[inline]
     pub async fn tcpip_forward(
         &self,
-        address: impl Into<String>,
-        port: u32,
+        address: SocketAddr,
+        // port: u32,
         initial: u32,
         maximum: u32,
     ) -> Result<Listener> {
         let (sender, recver) = o_channel();
         self.send_request(Request::TcpipForward {
-            address: address.into(),
-            port,
+            address,
+            // port,
             initial,
             maximum,
             sender,
@@ -484,7 +483,7 @@ where
     channels: HashMap<u32, ChannelInner>,
 
     #[new(default)]
-    listeners: HashMap<(String, u32), ListenerInner>,
+    listeners: HashMap<SocketAddr, ListenerInner>,
     weak_sender: MWSender<Request>,
     behaivor: Option<B>,
 }
@@ -784,7 +783,10 @@ where
 
             self.channels.insert(client_id, inner);
 
-            let socket = Stream::new(channel, originator_address, originator_port);
+            let socket = Stream::new(
+                channel,
+                SocketAddr::new(originator_address, originator_port),
+            );
 
             behavior.x11_forward(socket).await?;
         } else {
@@ -813,7 +815,7 @@ where
         originator_address: String,
         originator_port: u32,
     ) -> Result<()> {
-        let listen = (listen_address, listen_port);
+        let listen = SocketAddr::new(listen_address, listen_port);
 
         let mut buffer = Buffer::with_capacity(128);
         match self.listeners.get(&listen) {
@@ -843,7 +845,10 @@ where
 
                 self.channels.insert(client_id, inner);
 
-                let socket = Stream::new(channel, originator_address, originator_port);
+                let socket = Stream::new(
+                    channel,
+                    SocketAddr::new(originator_address, originator_port),
+                );
                 let _ = listener.sender.send(socket);
             }
             None => {
@@ -1075,19 +1080,19 @@ where
             }
             Request::TcpipForward {
                 address,
-                port,
+                // port,
                 initial,
                 maximum,
                 sender,
             } => {
-                let _ = sender.send(self.tcpip_forward(&address, port, initial, maximum).await);
+                let _ = sender.send(self.tcpip_forward(address, initial, maximum).await);
             }
             Request::CancelTcpipForward {
                 address,
-                port,
+                // port,
                 sender,
             } => {
-                let res = self.cancel_tcpip_forward(&address, port).await;
+                let res = self.cancel_tcpip_forward(&address).await;
 
                 if let Some(sender) = sender {
                     let _ = sender.send(res);
@@ -1230,6 +1235,7 @@ where
 
         self.stream.send_payload(buffer).await?;
 
+        #[allow(clippy::type_complexity)]
         fn parse(payload: &[u8]) -> Option<(&[u8], &[u8], Vec<(&[u8], bool)>)> {
             let payload = Buffer::from_slice(payload);
 
@@ -1390,8 +1396,8 @@ where
         &mut self,
         initial: u32,
         maximum: u32,
-        remote: (String, u32),
-        local: (String, u32),
+        remote: SocketAddr,
+        local: SocketAddr,
     ) -> Result<Channel> {
         let session = self.upgrade_sender()?;
         // let mut buffer = Buffer::new();
@@ -1413,10 +1419,10 @@ where
             u32: client_id,
             u32: initial,
             u32: maximum,
-            one: remote.0,
-            u32: remote.1,
-            one: local.0,
-            u32: local.1
+            one: remote.host,
+            u32: remote.port,
+            one: local.host,
+            u32: local.port
         };
 
         self.stream.send_payload(buffer).await?;
@@ -1459,7 +1465,7 @@ where
         }
     }
 
-    async fn cancel_tcpip_forward(&mut self, address: &str, port: u32) -> Result<()> {
+    async fn cancel_tcpip_forward(&mut self, address: &SocketAddr) -> Result<()> {
         // let mut buffer = Buffer::new();
         // buffer.put_u8(SSH_MSG_GLOBAL_REQUEST);
         // buffer.put_one("cancel-tcpip-forward");
@@ -1471,8 +1477,8 @@ where
             u8: SSH_MSG_GLOBAL_REQUEST,
             one: "cancel-tcpip-forward",
             u8: 1,
-            one: address,
-            u32: port,
+            one: &address.host,
+            u32: address.port,
         };
 
         self.stream.send_payload(buffer).await?;
@@ -1483,7 +1489,7 @@ where
 
             match payload.take_u8() {
                 Some(SSH_MSG_REQUEST_SUCCESS) => {
-                    self.listeners.remove(&(address.to_string(), port));
+                    self.listeners.remove(address);
                     return Ok(());
                 }
                 Some(SSH_MSG_REQUEST_FAILURE) => {
@@ -1503,8 +1509,8 @@ where
 
     async fn tcpip_forward(
         &mut self,
-        address: &str,
-        mut port: u32,
+        mut address: SocketAddr,
+        // mut port: u32,
         initial: u32,
         maximum: u32,
     ) -> Result<Listener> {
@@ -1520,8 +1526,8 @@ where
             u8: SSH_MSG_GLOBAL_REQUEST,
             one: "tcpip-forward",
             u8: 1,
-            one: address,
-            u32: port,
+            one: &address.host,
+            u32: address.port,
         };
 
         self.stream.send_payload(buffer).await?;
@@ -1532,19 +1538,19 @@ where
 
             match payload.take_u8() {
                 Some(SSH_MSG_REQUEST_SUCCESS) => {
-                    if port == 0 {
-                        port = payload
+                    if address.port == 0 {
+                        address.port = payload
                             .take_u32()
                             .ok_or(Error::invalid_format("Invalid port"))?;
                     }
                     let (sender, recver) = m_channel();
 
                     self.listeners.insert(
-                        (address.to_string(), port),
+                        address.clone(),
                         ListenerInner::new(sender, initial, maximum),
                     );
 
-                    return Ok(Listener::new(session, recver, address.to_string(), port));
+                    return Ok(Listener::new(session, recver, address));
                 }
                 Some(SSH_MSG_REQUEST_FAILURE) => {
                     return Err(Error::RequestFailure("Failed to tcpip forward".to_string()));
