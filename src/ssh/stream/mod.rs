@@ -38,6 +38,24 @@ where
     }
 }
 
+#[async_trait::async_trait]
+impl<T> Stream for CipherStream<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    async fn send_payload(&mut self, payload: &[u8]) -> Result<()> {
+        CipherStream::send_payload(self, payload).await
+    }
+
+    async fn recv_packet(&mut self) -> Result<Packet> {
+        CipherStream::recv_packet(self).await
+    }
+
+    async fn send_new_keys(&mut self) -> Result<()> {
+        CipherStream::send_new_keys(self).await
+    }
+}
+
 use crate::{
     cipher::{crypt::Encrypt, mac::Mac},
     ssh::buffer::Buffer,
@@ -227,6 +245,7 @@ impl NormalEndpoint {
             // cipher,
             mac,
             kex_strict: self.kex_strict,
+            ext: self.ext,
             sequence_number: self.sequence_number,
             // compress,
         }
@@ -245,6 +264,7 @@ where
 pub struct EncryptedEndpoint {
     pub mac: Box<dyn Mac + Send>,
     pub kex_strict: bool,
+    pub ext: bool,
     pub sequence_number: u32,
 }
 
@@ -291,7 +311,7 @@ where
     pub async fn send_new_keys(&mut self) -> Result<()> {
         self.send_payload(&[SSH_MSG_NEWKEYS]).await?;
         if self.client.kex_strict && self.server.kex_strict {
-            self.server.sequence_number = 0;
+            // self.server.sequence_number = 0;
             self.client.sequence_number = 0;
         }
         Ok(())
@@ -324,7 +344,7 @@ where
             && self.server.kex_strict
         {
             self.server.sequence_number = 0;
-            self.client.sequence_number = 0;
+            // self.client.sequence_number = 0;
         }
 
         Ok(pakcet)
@@ -429,14 +449,14 @@ impl<T> CipherStream<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    // pub async fn send_new_keys(&mut self) -> Result<()> {
-    //     self.send_payload(&[SSH_MSG_NEWKEYS]).await?;
-    //     if self.client.kex_strict && self.server.kex_strict {
-    //         self.client.sequence_number = 0;
-    //         self.server.sequence_number = 0;
-    //     }
-    //     Ok(())
-    // }
+    pub async fn send_new_keys(&mut self) -> Result<()> {
+        self.send_payload(&[SSH_MSG_NEWKEYS]).await?;
+        if self.client.kex_strict && self.server.kex_strict {
+            self.client.sequence_number = 0;
+            // self.server.sequence_number = 0;
+        }
+        Ok(())
+    }
 
     pub async fn recv_packet(&mut self) -> Result<Packet> {
         let mut func = |data: Buffer<Cell<&[u8]>>, mac: Option<Vec<u8>>| {
@@ -699,7 +719,7 @@ where
             && self.server.kex_strict
         {
             self.server.sequence_number = 0;
-            self.client.sequence_number = 0;
+            // self.client.sequence_number = 0;
         }
         Ok(packet)
     }

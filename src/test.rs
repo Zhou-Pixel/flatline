@@ -17,7 +17,7 @@ const IP: &str = "192.168.8.116:22";
 const USER: &str = "zhou";
 const PASS: &str = "123456";
 
-async fn open_session<B: Behavior + Send + 'static>(config: Config<B>) -> Session {
+async fn open_session<B: Behavior + Send + Sync + 'static>(config: Config<B>) -> Session {
     let socket = TcpStream::connect(IP).await.unwrap();
     let session = Session::handshake(config, socket).await.unwrap();
 
@@ -123,7 +123,7 @@ async fn open_sftp() {
     sender.finish().await.unwrap();
 }
 
-async fn echo_hello<B: Behavior + Send + 'static>(config: Config<B>, times: usize) {
+async fn echo_hello<B: Behavior + Send + Sync + 'static>(config: Config<B>, times: usize) {
     let socket = TcpStream::connect(IP).await.unwrap();
     let session = Session::handshake(config, socket).await.unwrap();
 

@@ -59,7 +59,7 @@ macro_rules! channel_loop {
 
 #[derive(new)]
 struct Endpoint {
-    _banner: String,
+    banner: String,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +149,16 @@ impl Session {
 
     fn manually_drop(&mut self) {
         unsafe { ManuallyDrop::drop(&mut self.sender) }
+    }
+
+    pub async fn rexchange(&self) -> Result<()> {
+        let (sender, recver) = o_channel();
+
+        let request = Request::KeyReExchange(sender);
+
+        self.send_request(request)?;
+
+        recver.await?
     }
 
     #[inline]
@@ -382,7 +392,7 @@ impl Session {
     pub async fn handshake<T, B>(mut config: handshake::Config<B>, socket: T) -> Result<Self>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-        B: Behavior + Send + 'static,
+        B: Behavior + Send + Sync + 'static,
     {
         let mut buffer_stream = BufferStream::new(socket);
 
@@ -448,11 +458,11 @@ impl Session {
         let mut inner = SessionInner::new(
             result.session_id,
             stream,
-            Endpoint::new(config.banner),
+            Endpoint::new(config.banner.clone()),
             Endpoint::new(banner),
             recver,
             weak_sender,
-            config.behavior,
+            config,
         );
         inner.request_userauth_service().await?;
         inner.run();
@@ -475,8 +485,8 @@ where
 {
     session_id: Vec<u8>,
     stream: CipherStream<T>,
-    _client: Endpoint,
-    _server: Endpoint,
+    client: Endpoint,
+    server: Endpoint,
     recver: MReceiver<Request>,
 
     #[new(default)]
@@ -485,13 +495,14 @@ where
     #[new(default)]
     listeners: HashMap<SocketAddr, ListenerInner>,
     weak_sender: MWSender<Request>,
-    behaivor: Option<B>,
+    // behaivor: Option<B>,
+    config: handshake::Config<B>,
 }
 
 impl<T, B> SessionInner<T, B>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    B: Behavior + Send,
+    B: Behavior + Send + Sync,
 {
     fn run(mut self) {
         tokio::spawn(async move {
@@ -624,7 +635,7 @@ where
                 description,
                 tag,
             } => {
-                if let Some(ref mut behavior) = self.behaivor {
+                if let Some(behavior) = self.behaviour() {
                     behavior.disconnect(reason, &description, &tag).await?;
                 }
                 return Err(Error::Disconnected);
@@ -636,13 +647,13 @@ where
                 want_reply,
                 hostkeys,
             } => {
-                if let Some(ref mut behavior) = self.behaivor {
+                if let Some(behavior) = self.behaviour() {
                     let hostkeys: Vec<&[u8]> = hostkeys.iter().map(|v| v.as_slice()).collect();
                     behavior.openssh_hostkeys(want_reply, &hostkeys).await?;
                 }
             }
             Message::UserauthBanner { msg, tag } => {
-                if let Some(ref mut behavior) = self.behaivor {
+                if let Some(behavior) = self.behaviour() {
                     behavior.useauth_banner(&msg, &tag).await?;
                 }
             }
@@ -651,12 +662,12 @@ where
                 msg,
                 tag,
             } => {
-                if let Some(ref mut behavior) = self.behaivor {
+                if let Some(behavior) = self.behaviour() {
                     behavior.debug(always_display, &msg, &tag).await?;
                 }
             }
             Message::Ignore(data) => {
-                if let Some(ref mut behavior) = self.behaivor {
+                if let Some(behavior) = self.behaviour() {
                     behavior.ignore(&data).await?;
                 }
             }
@@ -687,7 +698,7 @@ where
                 self.handle_global_keep_alive(want_reply).await?;
             }
             Message::ExtInfo(ext) => {
-                if let Some(ref mut behavior) = self.behaivor {
+                if let Some(behavior) = self.behaviour() {
                     for (name, value) in ext {
                         if name == "server-sig-algs" {
                             let value = std::str::from_utf8(&value)?;
@@ -714,12 +725,83 @@ where
                 self.handle_channel_keep_alive(want_reply, recipient)
                     .await?;
             }
+            Message::KexIntial(payload) => {
+                self.handle_rexchange(&payload).await?;
+            }
             msg => {
                 println!("msg :{:?} from server is ignore", msg);
             }
         }
 
         Ok(())
+    }
+
+    async fn handle_rexchange(&mut self, payload: &[u8]) -> Result<()> {
+        let meex = handshake::method_exchange_with_payload(&mut self.stream, payload, &self.config)
+            .await?;
+
+        self.stream.server.kex_strict = meex.server.methods.kex_strict;
+        self.stream.server.ext = meex.server.methods.ext;
+
+        let mut algo =
+            handshake::match_method(&meex.client.methods, &meex.server.methods, &self.config)?;
+
+        let dhconfig = Dependency::new(
+            self.client.banner.clone(),
+            meex.client.binary,
+            self.server.banner.clone(),
+            meex.server.binary,
+            self.stream.client.kex_strict && self.stream.server.kex_strict,
+        );
+        let mut result = algo.kex.kex(dhconfig, &mut self.stream).await?;
+        // result.session_id = self.session_id.clone();
+        // result.client_hash = self.session_id.clone();
+
+        algo.hostkey.initialize(&result.server_hostkey)?;
+
+        let res = algo
+            .hostkey
+            .verify(&result.server_signature, &result.client_hash)?;
+
+        if !res {
+            return Err(Error::HostKeyVerifyFailed);
+        }
+
+        if let Some(behavior) = self.behaviour() {
+            if !behavior
+                .verify_server_hostkey(algo.hostkey.name(), &result.server_hostkey)
+                .await?
+            {
+                return Err(Error::RejectByUser(
+                    "Server public key rejected by user".to_string(),
+                ));
+            }
+        }
+
+        handshake::new_keys(&mut self.stream).await?;
+
+        result.session_id.clone_from(&self.session_id);
+
+        algo.initialize(&mut result)?;
+
+        self.stream.decrypt = algo.server_crypt;
+        self.stream.encrypt = algo.client_crypt;
+        self.stream.server.mac = algo.server_mac;
+        self.stream.client.mac = algo.client_mac;
+        self.stream.decode = algo.server_compress;
+        self.stream.encode = algo.client_compress;
+
+        Ok(())
+    }
+
+    fn behaviour(&mut self) -> Option<&mut B> {
+        // if let Some(ref mut config) = self.config {
+        //     if let Some(ref mut b) = config.behavior {
+        //         return  Some(b);
+        //     }
+        // }
+        // None
+        self.config.behavior.as_mut()
     }
 
     fn upgrade_sender(&self) -> Result<MSender<Request>> {
@@ -759,7 +841,7 @@ where
     ) -> Result<()> {
         let session = self.upgrade_sender()?;
         let client_id = self.genarate_channel_id();
-        if let Some(ref mut behavior) = self.behaivor {
+        if let Some(behavior) = self.config.behavior.as_mut() {
             let buffer = make_buffer_without_header! {
                 u8: SSH_MSG_CHANNEL_OPEN_CONFIRMATION,
                 u32: sender,
@@ -1165,8 +1247,70 @@ where
 
                 let _ = sender.send(res);
             }
+            Request::KeyReExchange(sender) => {
+                let res = self.rexchange().await;
+
+                let _ = sender.send(res);
+            }
         }
         false
+    }
+
+    async fn rexchange(&mut self) -> Result<()> {
+        let meex = handshake::method_exchange(&mut self.stream, &self.config).await?;
+
+        self.stream.server.kex_strict = meex.server.methods.kex_strict;
+        self.stream.server.ext = meex.server.methods.ext;
+
+        let mut algo =
+            handshake::match_method(&meex.client.methods, &meex.server.methods, &self.config)?;
+
+        let dhconfig = Dependency::new(
+            self.client.banner.clone(),
+            meex.client.binary,
+            self.server.banner.clone(),
+            meex.server.binary,
+            self.stream.client.kex_strict && self.stream.server.kex_strict,
+        );
+        let mut result = algo.kex.kex(dhconfig, &mut self.stream).await?;
+        // result.session_id = self.session_id.clone();
+        // result.client_hash = self.session_id.clone();
+
+        algo.hostkey.initialize(&result.server_hostkey)?;
+
+        let res = algo
+            .hostkey
+            .verify(&result.server_signature, &result.client_hash)?;
+
+        if !res {
+            return Err(Error::HostKeyVerifyFailed);
+        }
+
+        if let Some(behavior) = self.behaviour() {
+            if !behavior
+                .verify_server_hostkey(algo.hostkey.name(), &result.server_hostkey)
+                .await?
+            {
+                return Err(Error::RejectByUser(
+                    "Server public key rejected by user".to_string(),
+                ));
+            }
+        }
+
+        handshake::new_keys(&mut self.stream).await?;
+
+        result.session_id.clone_from(&self.session_id);
+
+        algo.initialize(&mut result)?;
+
+        self.stream.decrypt = algo.server_crypt;
+        self.stream.encrypt = algo.client_crypt;
+        self.stream.server.mac = algo.server_mac;
+        self.stream.client.mac = algo.client_mac;
+        self.stream.decode = algo.server_compress;
+        self.stream.encode = algo.client_compress;
+
+        Ok(())
     }
 
     async fn channel_xon_xoff(&mut self, id: u32, allow: bool) -> Result<()> {

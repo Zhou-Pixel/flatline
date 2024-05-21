@@ -228,10 +228,6 @@ impl<'a> KeyExChange for DiffieHellmanKeyExchange<'a> {
 
         let bnf = BigNum::from_slice(&f)?;
 
-        /*
-        [10, 87, 66, 109, 6, 170, 208, 174, 116, 146, 15, 150, 93, 217, 154, 233, 93, 241, 37, 253, 199, 204, 219, 138, 227, 14, 228, 201, 30, 28, 20, 144]
-         */
-
         let secret_key = dh.secret_key(&pri_key, &bnf, &mut ctx)?;
 
         // session.scrt = serk

@@ -171,6 +171,7 @@ pub(crate) enum Request {
         #[debug(skip)]
         sender: OSender<Result<()>>,
     },
+    KeyReExchange(OSender<Result<()>>),
 }
 
 #[derive(custom_debug_derive::Debug)]
@@ -268,6 +269,7 @@ pub(crate) enum Message {
         port: u32,
     },
     ExtInfo(HashMap<String, Vec<u8>>),
+    KexIntial(Vec<u8>),
 }
 
 impl Message {
@@ -550,6 +552,7 @@ impl Message {
 
                     Some(Self::ExtInfo(map))
                 }
+                SSH_MSG_KEXDH_INIT => Some(Self::KexIntial(payload.to_vec())),
                 _ => {
                     detail = format!("unknown code: {code} datalen: {}", buffer.len());
                     None

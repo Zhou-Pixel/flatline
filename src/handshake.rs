@@ -436,6 +436,152 @@ pub(crate) async fn method_exchange<B: Behavior>(
     Ok(MethodExchange::new(client, server))
 }
 
+pub(crate) async fn method_exchange_with_payload<B: Behavior>(
+    stream: &mut dyn Stream,
+    bytes: &[u8],
+    config: &Config<B>,
+) -> Result<MethodExchange> {
+    let invalid_arg = |str: &str| Err(Error::InvalidArgument(str.to_string()));
+    if config.compress_client_to_server.is_empty() {
+        return invalid_arg(
+            "Compress client to server is empty, 'none' should be provided at least",
+        );
+    }
+
+    if config.compress_server_to_client.is_empty() {
+        return invalid_arg(
+            "Compress_server_to_client is empty, 'none' should be provided at least",
+        );
+    }
+
+    if config.crypt_client_to_server.is_empty() {
+        return invalid_arg("Crypt client to server is empty");
+    }
+
+    if config.crypt_server_to_client.is_empty() {
+        return invalid_arg("Crypt server to client is empty");
+    }
+
+    if config.mac_client_to_server.is_empty() {
+        return invalid_arg("Mac client to server is empty");
+    }
+
+    if config.mac_server_to_client.is_empty() {
+        return invalid_arg("Mac server to client is empty");
+    }
+
+    if config.hostkey.is_empty() {
+        return invalid_arg("Hostkey is empty");
+    }
+
+    if config.key_exchange.is_empty() {
+        return invalid_arg("Key exhange is empty");
+    }
+
+    let client_methods = Methods::from_config(config);
+
+    let mut kex = client_methods.kex.clone();
+
+    if client_methods.kex_strict {
+        kex.push(KEX_STRICT_CLIENT.to_string());
+    }
+
+    if client_methods.ext {
+        kex.push(EXT_INFO_CLIENT.to_string());
+    }
+
+    let mut randbytes = [0; 16];
+
+    rand_bytes(&mut randbytes)?;
+
+    let mut buffer = Buffer::new();
+    buffer.put_u8(SSH_MSG_KEXINIT);
+    buffer.put_bytes(randbytes);
+    buffer.put_one(kex.join(","));
+    buffer.put_one(client_methods.host_key.join(","));
+    buffer.put_one(client_methods.en_client_to_server.join(","));
+    buffer.put_one(client_methods.en_server_to_client.join(","));
+    buffer.put_one(client_methods.mac_client_to_server.join(","));
+    buffer.put_one(client_methods.mac_server_to_client.join(","));
+    buffer.put_one(client_methods.com_client_to_server.join(","));
+    buffer.put_one(client_methods.com_server_to_client.join(","));
+    buffer.put_one(client_methods.lang_client_to_server.join(","));
+    buffer.put_one(client_methods.lang_server_to_client.join(","));
+
+    buffer.put_u8(0); // ssh.first_kex_packet_follows
+    buffer.put_bytes([0; 4]); // ssh.kex.reserved
+
+    stream.send_payload(buffer.as_ref()).await?;
+
+    // let reply = stream.recv_packet().await?;
+
+    if bytes.is_empty() || bytes[0] != SSH_MSG_KEXINIT {
+        return Err(Error::ProtocolError(
+            "Failed to receive kex msg".to_string(),
+        ));
+    }
+
+    let parser = || {
+        let reply = Buffer::from_slice(bytes);
+
+        reply.take_u8()?;
+
+        reply.take_bytes(16)?;
+
+        let get = || {
+            let (_, methods) = reply.take_one()?;
+            let methods = std::str::from_utf8(methods).ok()?;
+
+            Some(
+                methods
+                    .split(',')
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>(),
+            )
+        };
+        let mut kex = get()?;
+
+        let mut kex_strict = false;
+        let mut ext = false;
+        if let Some(index) = kex.iter().position(|v| v == KEX_STRICT_SERVER) {
+            kex.remove(index);
+            kex_strict = true;
+        };
+
+        if let Some(index) = kex.iter().position(|v| v == EXT_INFO_SERVER) {
+            kex.remove(index);
+            ext = true;
+        };
+
+        let methods = Methods::new(
+            kex,
+            get()?,
+            get()?,
+            get()?,
+            get()?,
+            get()?,
+            get()?,
+            get()?,
+            get()?,
+            get()?,
+            kex_strict,
+            ext,
+        );
+
+        let _ = reply.take_u8()?;
+        let _ = reply.take_bytes(4)?;
+
+        Some(methods)
+    };
+
+    let server_methods = parser().ok_or(Error::invalid_format("Invalid packet"))?;
+
+    let client = Summary::new(buffer.into_vec(), client_methods);
+    let server = Summary::new(bytes.to_vec(), server_methods);
+
+    Ok(MethodExchange::new(client, server))
+}
+
 #[allow(clippy::too_many_arguments)]
 #[derive(new)]
 pub(crate) struct Algorithm {
