@@ -42,7 +42,7 @@ async fn main() {
     let session = Session::handshake(config, socket).await.unwrap();
 
     let res = session
-        .userauth_keyboard_interactive("zhou", &[], Keyboard {})
+        .userauth_keyboard_interactive("zhou", [] as [&str; 0], Keyboard {})
         .await
         .unwrap();
 

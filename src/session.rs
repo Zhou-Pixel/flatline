@@ -373,13 +373,13 @@ impl Session {
     pub async fn userauth_keyboard_interactive<T: Interactive + 'static>(
         &self,
         username: impl Into<String>,
-        prefer: &[&str],
+        prefer: impl IntoIterator<Item = impl Into<String>>,
         cb: T,
     ) -> Result<bool> {
         let (sender, recver) = o_channel();
         let request = Request::UserauthKeyboardInteractive {
             username: username.into(),
-            submethods: prefer.iter().map(|v| v.to_string()).collect(),
+            submethods: prefer.into_iter().map(|v| v.into()).collect(),
             cb: Box::new(cb),
             sender,
         };

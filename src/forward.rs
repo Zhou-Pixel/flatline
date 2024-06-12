@@ -22,19 +22,21 @@ pub struct SocketAddr {
     pub port: u32,
 }
 
+impl SocketAddr {
+    pub const ALL: &'static str = "";
+    pub const IPV4_ALL: &'static str = "0.0.0.0";
+    pub const IPV6_ALL: &'static str = "::";
+    pub const LOCALHOST: &'static str = "localhost";
+    pub const IPV4_LOCALHOST: &'static str = "127.0.0.1";
+    pub const IPV6_LOCALHOST: &'static str = "::1";
+}
+
 pub struct Stream {
     channel: ChannelStream,
     address: SocketAddr,
 }
 
 use std::result::Result as StdResult;
-
-pub const ALL: &str = "";
-pub const IPV4_ALL: &str = "0.0.0.0";
-pub const IPV6_ALL: &str = "::";
-pub const LOCALHOST: &str = "localhost";
-pub const IPV4_LOCALHOST: &str = "127.0.0.1";
-pub const IPV6_LOCALHOST: &str = "::1";
 
 impl AsyncRead for Stream {
     fn poll_read(

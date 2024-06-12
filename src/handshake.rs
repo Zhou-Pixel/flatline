@@ -584,7 +584,7 @@ pub(crate) async fn method_exchange_with_payload<B: Behavior>(
 
 #[allow(clippy::too_many_arguments)]
 #[derive(new)]
-pub(crate) struct Algorithm {
+pub(crate) struct MatchMethod {
     pub kex: Box<dyn KeyExChange + Send>,
     pub hostkey: Box<dyn Verify + Send>,
     pub server_crypt: Box<dyn Decrypt + Send>,
@@ -595,7 +595,7 @@ pub(crate) struct Algorithm {
     pub client_compress: Box<dyn Encode + Send>,
 }
 
-impl Algorithm {
+impl MatchMethod {
     pub(crate) fn initialize(&mut self, result: &mut DHSumary) -> Result<()> {
         let secret_key = Buffer::from_one(&result.secret_key);
 
@@ -669,7 +669,7 @@ pub(crate) fn match_method<B: Behavior>(
     client: &Methods,
     server: &Methods,
     config: &Config<B>,
-) -> Result<Algorithm> {
+) -> Result<MatchMethod> {
     let mut kex = None;
     let mut hostkey = None;
     let mut server_crypt = None;
@@ -788,7 +788,7 @@ pub(crate) fn match_method<B: Behavior>(
             }
 
             match (client_mac, server_mac) {
-                (Some(client_mac), Some(server_mac)) => Ok(Algorithm::new(
+                (Some(client_mac), Some(server_mac)) => Ok(MatchMethod::new(
                     kex.create(),
                     hostkey.create(),
                     server_crypt,
