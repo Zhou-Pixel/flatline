@@ -11,12 +11,14 @@ use crate::cipher::crypt::{self, Decrypt, Encrypt};
 use crate::cipher::kex::{self, KeyExChange};
 use crate::cipher::mac::{self, Mac};
 use crate::cipher::sign::{self, Verify};
+use crate::error::builder;
 use crate::handshake::code::*;
 use crate::project;
 use crate::ssh::buffer::Buffer;
 use derive_new::new;
 use indexmap::IndexMap;
 use openssl::rand::rand_bytes;
+use snafu::ResultExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub struct Config<B> {
@@ -223,16 +225,23 @@ pub(crate) async fn banner_exchange<T: AsyncWrite + AsyncRead + Unpin>(
     const MAX: usize = 255;
     loop {
         let line = stream.read_line_crlf().await?;
-        if count > MAX {
-            return Err(Error::BannerExchange("server banner too long".to_string()));
-        }
+        snafu::ensure!(
+            count <= MAX,
+            builder::BannerTooLong {
+                tip: "server banner too long"
+            }
+        );
+        // if count > MAX {
+        //     return Err(Error::BannerExchange("server banner too long".to_string()));
+        // }
         count += line.len();
         if line.starts_with(b"SSH-2.0") || line.starts_with(b"SSH-1.99") {
             // self.server_info.banner = Some(line);
             return Ok((String::from_utf8(line).map_err(|e| e.utf8_error())?, lines));
         } else if line.starts_with(b"SSH-") {
             // anyhow::bail!("server doesn't support ssh2");
-            return Err(Error::Ssh2Unsupport);
+            // return Err(Error::Ssh2Unsupport);
+            return builder::Ssh2Unsupport.fail();
         }
         lines.push(String::from_utf8(line).map_err(|e| e.utf8_error())?);
     }
@@ -295,7 +304,7 @@ pub(crate) async fn method_exchange<B: Behavior>(
     stream: &mut dyn Stream,
     config: &Config<B>,
 ) -> Result<MethodExchange> {
-    let invalid_arg = |str: &str| Err(Error::InvalidArgument(str.to_string()));
+    let invalid_arg = |str: &str| builder::InvalidArgument { tip: str }.fail();
     if config.compress_client_to_server.is_empty() {
         return invalid_arg(
             "Compress client to server is empty, 'none' should be provided at least",
@@ -346,7 +355,7 @@ pub(crate) async fn method_exchange<B: Behavior>(
 
     let mut randbytes = [0; 16];
 
-    rand_bytes(&mut randbytes)?;
+    rand_bytes(&mut randbytes).context(builder::Openssl)?;
 
     let mut buffer = Buffer::new();
     buffer.put_u8(SSH_MSG_KEXINIT);
@@ -370,9 +379,13 @@ pub(crate) async fn method_exchange<B: Behavior>(
     let reply = stream.recv_packet().await?;
 
     if reply.payload.is_empty() || reply.payload[0] != SSH_MSG_KEXINIT {
-        return Err(Error::ProtocolError(
-            "Failed to receive kex msg".to_string(),
-        ));
+        // return Err(Error::ProtocolError(
+        //     "Failed to receive kex msg".to_string(),
+        // ));
+        return builder::Protocol {
+            tip: "Failed to receive kex msg",
+        }
+        .fail();
     }
 
     let parser = || {
@@ -441,7 +454,7 @@ pub(crate) async fn method_exchange_with_payload<B: Behavior>(
     bytes: &[u8],
     config: &Config<B>,
 ) -> Result<MethodExchange> {
-    let invalid_arg = |str: &str| Err(Error::InvalidArgument(str.to_string()));
+    let invalid_arg = |str: &str| builder::InvalidArgument { tip: str }.fail();
     if config.compress_client_to_server.is_empty() {
         return invalid_arg(
             "Compress client to server is empty, 'none' should be provided at least",
@@ -492,7 +505,7 @@ pub(crate) async fn method_exchange_with_payload<B: Behavior>(
 
     let mut randbytes = [0; 16];
 
-    rand_bytes(&mut randbytes)?;
+    rand_bytes(&mut randbytes).context(builder::Openssl)?;
 
     let mut buffer = Buffer::new();
     buffer.put_u8(SSH_MSG_KEXINIT);
@@ -516,9 +529,13 @@ pub(crate) async fn method_exchange_with_payload<B: Behavior>(
     // let reply = stream.recv_packet().await?;
 
     if bytes.is_empty() || bytes[0] != SSH_MSG_KEXINIT {
-        return Err(Error::ProtocolError(
-            "Failed to receive kex msg".to_string(),
-        ));
+        // return Err(Error::ProtocolError(
+        //     "Failed to receive kex msg".to_string(),
+        // ));
+        return builder::Protocol {
+            tip: "Failed to receive kex msg",
+        }
+        .fail();
     }
 
     let parser = || {
@@ -798,10 +815,11 @@ pub(crate) fn match_method<B: Behavior>(
                     server_compress.create(),
                     client_compress.create(),
                 )),
-                _ => Err(Error::NegotiationFailed),
+                _ => builder::NegotiationFailed.fail(), //Err(Error::NegotiationFailed),
             }
         }
-        _ => Err(Error::NegotiationFailed),
+        _ => builder::NegotiationFailed.fail(), //Err(Error::NegotiationFailed),
+                                                // _ => Err(Error::NegotiationFailed),
     }
 }
 
@@ -809,9 +827,13 @@ pub(crate) async fn new_keys(stream: &mut dyn Stream) -> Result<()> {
     stream.send_new_keys().await?;
     let packet = stream.recv_packet().await?;
     if packet.payload[0] != SSH_MSG_NEWKEYS {
-        Err(Error::ProtocolError(
-            "Failed to receive new keys".to_string(),
-        ))
+        // Err(Error::ProtocolError(
+        //     "Failed to receive new keys".to_string(),
+        // ))
+        builder::Protocol {
+            tip: "Failed to receive new keys",
+        }
+        .fail()
     } else {
         Ok(())
     }

@@ -1,7 +1,10 @@
+use crate::error::builder;
+
 use super::ssh::common::code::*;
 use bytes::BufMut;
 use bytes::BytesMut;
 use derive_new::new;
+use snafu::OptionExt;
 use std::cmp::min;
 use std::io;
 use std::mem::transmute;
@@ -15,7 +18,7 @@ use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
 use tokio::sync::mpsc::error::TryRecvError;
 
-use super::error::{Error, Result};
+use super::error::Result;
 use super::msg::Request;
 use super::{o_channel, BoxFuture, MReceiver, MSender};
 
@@ -147,7 +150,12 @@ impl AsyncWrite for Stream {
             let future = self.channel.write(buf);
             let future: BoxFuture<'_, Result<usize>> = Box::pin(future);
 
-            self.write_future = unsafe { transmute(Some(future)) };
+            self.write_future = unsafe {
+                transmute::<
+                    Option<BoxFuture<'_, Result<usize>>>,
+                    Option<BoxFuture<'_, Result<usize>>>,
+                >(Some(future))
+            };
         }
         // we can't return Ok(0) here because Ok(0) means error in tokio::io::copy_bidirectional;
         loop {
@@ -161,7 +169,12 @@ impl AsyncWrite for Stream {
                     };
                     let future: BoxFuture<'_, Result<usize>> = Box::pin(future);
 
-                    self.write_future = unsafe { transmute(Some(future)) };
+                    self.write_future = unsafe {
+                        transmute::<
+                            Option<BoxFuture<'_, Result<usize>>>,
+                            Option<BoxFuture<'_, Result<usize>>>,
+                        >(Some(future))
+                    };
                 }
                 Ok(size) => break Poll::Ready(Ok(size)),
                 Err(err) => {
@@ -195,7 +208,12 @@ impl AsyncRead for Stream {
             let f = self.read_maximum(buf.remaining());
             let f: Option<BoxFuture<'_, Result<Vec<u8>>>> = Some(Box::pin(f));
 
-            self.read_future = unsafe { transmute(f) };
+            self.read_future = unsafe {
+                transmute::<
+                    Option<BoxFuture<'_, Result<Vec<u8>>>>,
+                    Option<BoxFuture<'_, Result<Vec<u8>>>>,
+                >(f)
+            };
         }
 
         let res = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
@@ -216,7 +234,8 @@ impl Stream {
             if self.rw_stdout {
                 if self.stdout.is_empty() {
                     if self.closed {
-                        return Err(Error::ChannelClosed);
+                        // return Err(Error::ChannelClosed);
+                        return builder::ChannelClosed.fail();
                     }
                     if self.eof {
                         return Ok(vec![]);
@@ -226,7 +245,8 @@ impl Stream {
                     match msg {
                         Message::Close => {
                             self.closed = true;
-                            return Err(Error::ChannelClosed);
+                            // return Err(Error::ChannelClosed);
+                            return builder::ChannelClosed.fail();
                         }
                         Message::Eof => {
                             self.eof = true;
@@ -252,7 +272,8 @@ impl Stream {
                 }
             } else if self.stderr.is_empty() {
                 if self.closed {
-                    return Err(Error::ChannelClosed);
+                    // return Err(Error::ChannelClosed);
+                    return builder::ChannelClosed.fail();
                 }
                 if self.eof {
                     return Ok(vec![]);
@@ -261,7 +282,8 @@ impl Stream {
                 match msg {
                     Message::Close => {
                         self.closed = true;
-                        return Err(Error::ChannelClosed);
+                        // return Err(Error::ChannelClosed);
+                        return builder::ChannelClosed.fail();
                     }
                     Message::Eof => {
                         self.eof = true;
@@ -367,21 +389,25 @@ pub(crate) struct BufferChannel {
 impl BufferChannel {
     async fn recv(&mut self) -> Result<()> {
         if self.closed {
-            return Err(Error::ChannelClosed);
+            // return Err(Error::ChannelClosed);
+            return builder::ChannelClosed.fail();
         }
         if self.eof {
-            return Err(Error::ChannelEof);
+            // return Err(Error::ChannelEof);
+            return builder::ChannelEof.fail();
         }
         loop {
             let msg = self.channel.recv().await?;
             match msg {
                 Message::Close => {
                     self.closed = true;
-                    return Err(Error::ChannelClosed);
+                    // return Err(Error::ChannelClosed);
+                    return builder::ChannelClosed.fail();
                 }
                 Message::Eof => {
                     self.eof = true;
-                    return Err(Error::ChannelEof);
+                    // return Err(Error::ChannelEof);
+                    return builder::ChannelEof.fail();
                 }
                 Message::Stdout(data) => {
                     self.stdout.put(data.as_ref());
@@ -425,7 +451,8 @@ impl BufferChannel {
 
     pub(crate) async fn write(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
         if self.closed {
-            return Err(Error::ChannelClosed);
+            // return Err(Error::ChannelClosed);
+            return builder::ChannelClosed.fail();
         }
         self.stdin.put(data.as_ref());
 
@@ -437,7 +464,8 @@ impl BufferChannel {
 
     pub(crate) async fn write_all(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
         if self.closed {
-            return Err(Error::ChannelClosed);
+            // return Err(Error::ChannelClosed);
+            return builder::ChannelClosed.fail();
         }
         self.stdin.put(data.as_ref());
 
@@ -461,8 +489,26 @@ impl BufferChannel {
 
 pub struct Channel {
     pub(crate) id: u32,
-    recver: ManuallyDrop<MReceiver<Message>>,
+    recver: ManuallyDrop<Option<MReceiver<Message>>>,
     session: ManuallyDrop<MSender<Request>>,
+}
+
+pub struct Receiver {
+    recver: MReceiver<Message>,
+}
+
+impl Receiver {
+    pub async fn recv(&mut self) -> Result<Message> {
+        self.recver.recv().await.context(builder::Disconnected)
+    }
+
+    pub fn try_recv(&mut self) -> Result<Option<Message>> {
+        match self.recver.try_recv() {
+            Ok(msg) => Ok(Some(msg)),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => builder::Disconnected.fail(), // Err(Error::Disconnected),
+        }
+    }
 }
 
 impl Drop for Channel {
@@ -479,7 +525,7 @@ impl Channel {
     pub(crate) fn new(id: u32, channel: MReceiver<Message>, session: MSender<Request>) -> Self {
         Self {
             id,
-            recver: ManuallyDrop::new(channel),
+            recver: ManuallyDrop::new(Some(channel)),
             session: ManuallyDrop::new(session),
         }
     }
@@ -549,15 +595,42 @@ impl Channel {
         recver.await?
     }
 
+    pub fn merge_receiver(&mut self, recver: Receiver) -> std::result::Result<(), Receiver> {
+        if self.recver.is_some() {
+            return Err(recver);
+        }
+        *self.recver = Some(recver.recver);
+        Ok(())
+    }
+
+    pub fn take_receiver(&mut self) -> Option<Receiver> {
+        self.recver.take().map(|r| Receiver { recver: r })
+    }
+
+    pub fn has_receiver(&self) -> bool {
+        self.recver.is_some()
+    }
+
     pub async fn recv(&mut self) -> Result<Message> {
-        self.recver.recv().await.ok_or(Error::Disconnected)
+        self.recver
+            .as_mut()
+            .context(builder::ChannelReceiverIsNone)?
+            .recv()
+            .await
+            .context(builder::Disconnected)
+        // .ok_or(Error::Disconnected)
     }
 
     pub fn try_recv(&mut self) -> Result<Option<Message>> {
-        match self.recver.try_recv() {
+        match self
+            .recver
+            .as_mut()
+            .context(builder::ChannelReceiverIsNone)?
+            .try_recv()
+        {
             Ok(msg) => Ok(Some(msg)),
             Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Err(Error::Disconnected),
+            Err(TryRecvError::Disconnected) => builder::Disconnected.fail(), //Err(Error::Disconnected),
         }
     }
 
@@ -646,7 +719,7 @@ impl Channel {
     }
 
     pub async fn request_x11_forward(
-        &mut self,
+        &self,
         single_connection: bool,
         protocol: impl Into<String>,
         cookie: impl Into<String>,
@@ -682,7 +755,9 @@ impl Channel {
     }
 
     fn send_request(&self, msg: Request) -> Result<()> {
-        self.session.send(msg).map_err(|_| Error::Disconnected)
+        self.session
+            .send(msg)
+            .map_err(|_| builder::Disconnected.build()) //.map_err(|_| Error::Disconnected)
     }
 
     pub(crate) fn session(&self) -> MSender<Request> {

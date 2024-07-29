@@ -20,13 +20,14 @@ derive-new = "0.6"
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 indexmap = "2"
 openssl = { version = "0.10.63" }
-thiserror = "1.0"
+snafu = "0.8"
 tokio = { version = "1", features = ["io-util", "rt", "macros", "sync"] }
 
 
 [features]
 openssl-vendored = [ "openssl/vendored" ]
 default = [ "openssl-vendored" ]
+backtrace = [ "snafu/backtrace" ]
 
 
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::error::{Error, Result};
+use crate::error::{builder, Error, Result};
 use derive_new::new;
 use indexmap::IndexMap;
 use openssl::{
@@ -782,9 +782,10 @@ impl Decrypt for Chacha20Poly1205 {
         let mut tag = vec![];
         self.get_mac_ctx()?.digest_sign_final_to_vec(&mut tag)?;
 
-        if self.mac != Some(tag) {
-            return Err(Error::MacVerificationFailed);
-        }
+        // if self.mac != Some(tag) {
+        //     return Err(Error::MacVerificationFailed);
+        // }
+        snafu::ensure!(self.mac == Some(tag), builder::MacVerificationFailed);
 
         self.mac = None;
 

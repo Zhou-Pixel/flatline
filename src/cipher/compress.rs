@@ -1,5 +1,5 @@
 use super::*;
-use crate::error::{Error, Result};
+use crate::error::{builder, Result};
 use flate2::{Compress, Compression, Decompress, Status};
 use indexmap::IndexMap;
 use std::mem;
@@ -120,7 +120,7 @@ impl Encode for ZEncoder {
                     }
                     Ok(())
                 }
-                _ => Err(Error::CompressFailed),
+                _ => builder::CompressFailed.fail(), //Err(Error::CompressFailed),
             };
         }
     }
@@ -173,7 +173,7 @@ impl Decode for ZDecoder {
                     }
                     Ok(())
                 }
-                _ => Err(Error::CompressFailed),
+                _ => builder::CompressFailed.fail(), //Err(Error::CompressFailed),
             };
         }
 

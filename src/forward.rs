@@ -6,13 +6,11 @@ use std::{
 };
 
 use derive_new::new;
+use snafu::OptionExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::{channel::Channel, msg::Request};
-use crate::{
-    channel::Stream as ChannelStream,
-    error::{Error, Result},
-};
+use crate::{channel::Channel, error::builder, msg::Request};
+use crate::{channel::Stream as ChannelStream, error::Result};
 
 use super::{o_channel, MReceiver, MSender};
 
@@ -124,7 +122,7 @@ impl Listener {
     }
 
     pub async fn accpet(&mut self) -> Result<Stream> {
-        self.recver.recv().await.ok_or(Error::Disconnected)
+        self.recver.recv().await.context(builder::Disconnected) //.ok_or(Error::Disconnected)
     }
 
     fn manually_drop(&mut self) {
@@ -145,13 +143,13 @@ impl Listener {
 
         self.session
             .send(request)
-            .map_err(|_| Error::Disconnected)?;
+            .map_err(|_| builder::Disconnected.build())?;
 
         self.manually_drop();
 
         mem::forget(self);
 
-        recver.await.map_err(|_| Error::Disconnected)?
+        recver.await.map_err(|_| builder::Disconnected.build())?
     }
 
     // pub fn listen_port(&self) -> u32 {

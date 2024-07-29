@@ -8,10 +8,11 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use derive_new::new;
+use snafu::OptionExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::channel::{BufferChannel, Channel};
-use crate::error::Result;
+use crate::error::{builder, Result};
 use crate::msg::Request;
 use crate::ssh::common::*;
 use crate::BoxFuture;
@@ -156,7 +157,7 @@ impl<'a> AsyncWrite for Stream<'a> {
     ) -> Poll<io::Result<usize>> {
         let this: &mut Stream<'a> = unsafe { transmute(Pin::into_inner(self)) };
 
-        let buf = unsafe { transmute(buf) };
+        let buf = unsafe { transmute::<&[u8], &[u8]>(buf) };
 
         this.poll_write_no_pin(cx, buf)
     }
@@ -514,63 +515,91 @@ impl Status {
         match self {
             Status::OK => Ok(Default::default()),
             Status::Eof => Ok(Default::default()),
-            Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
-            Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-            Status::Failure => Err(Error::SFtpFailure(msg)),
-            Status::BadMessage => Err(Error::BadMessage(msg)),
-            Status::NoConnection => Err(Error::NoConnection(msg)),
-            Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
-            Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
+            Status::NoSuchFile => builder::NoSuchFile { tip: msg }.fail(), //Err(Error::NoSuchFile(msg)),
+            Status::PermissionDenied => builder::PermissionDenied { tip: msg }.fail(), //Err(Error::PermissionDenied(msg)),
+            Status::Failure => builder::SFtpFailure { tip: msg }.fail(), //Err(Error::SFtpFailure(msg)),
+            Status::BadMessage => builder::BadMessage { tip: msg }.fail(), //Err(Error::BadMessage(msg)),
+            Status::NoConnection => builder::NoConnection { tip: msg }.fail(), // Err(Error::NoConnection(msg)),
+            Status::ConnectionLost => builder::NoConnection { tip: msg }.fail(), // Err(Error::ConnectionLost(msg)),
+            Status::OpUnsupported => builder::OpUnsupported { tip: msg }.fail(), // Err(Error::OpUnsupported(msg)),
         }
     }
 
     fn no_ok_and_eof<T>(&self, msg: String) -> Result<T> {
         match self {
-            Status::OK => Err(Error::ProtocolError(
+            Status::OK =>
+            /*  Err(Error::ProtocolError(
                 "Unexpected Ok status received".to_string(),
-            )),
-            Status::Eof => Err(Error::ProtocolError(
+            )) */
+            {
+                builder::Protocol {
+                    tip: "Unexpected Ok status received",
+                }
+                .fail()
+            }
+            Status::Eof =>
+            /* Err(Error::ProtocolError(
                 "Unexpected EOF status received".to_string(),
-            )),
-            Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
-            Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-            Status::Failure => Err(Error::SFtpFailure(msg)),
-            Status::BadMessage => Err(Error::BadMessage(msg)),
-            Status::NoConnection => Err(Error::NoConnection(msg)),
-            Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
-            Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
+            ))*/
+            {
+                builder::Protocol {
+                    tip: "Unexpected EOF status received",
+                }
+                .fail()
+            }
+            Status::NoSuchFile => builder::NoSuchFile { tip: msg }.fail(), //   Err(Error::NoSuchFile(msg)),
+            Status::PermissionDenied => builder::PermissionDenied { tip: msg }.fail(), // Err(Error::PermissionDenied(msg)),
+            Status::Failure => builder::SFtpFailure { tip: msg }.fail(), // Err(Error::SFtpFailure(msg)),
+            Status::BadMessage => builder::BadMessage { tip: msg }.fail(), // Err(Error::BadMessage(msg)),
+            Status::NoConnection => builder::NoConnection { tip: msg }.fail(), // Err(Error::NoConnection(msg)),
+            Status::ConnectionLost => builder::NoConnection { tip: msg }.fail(), // Err(Error::ConnectionLost(msg)),
+            Status::OpUnsupported => builder::OpUnsupported { tip: msg }.fail(), // Err(Error::OpUnsupported(msg)),
         }
     }
 
     fn no_eof<T: Default>(&self, msg: String) -> Result<T> {
         match self {
             Status::OK => Ok(Default::default()),
-            Status::Eof => Err(Error::ProtocolError(
+            Status::Eof =>
+            /* Err(Error::ProtocolError(
                 "Unexpected EOF status received".to_string(),
-            )),
-            Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
-            Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-            Status::Failure => Err(Error::SFtpFailure(msg)),
-            Status::BadMessage => Err(Error::BadMessage(msg)),
-            Status::NoConnection => Err(Error::NoConnection(msg)),
-            Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
-            Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
+            ))*/
+            {
+                builder::Protocol {
+                    tip: "Unexpected EOF status received",
+                }
+                .fail()
+            }
+            Status::NoSuchFile => builder::NoSuchFile { tip: msg }.fail(), //   Err(Error::NoSuchFile(msg)),
+            Status::PermissionDenied => builder::PermissionDenied { tip: msg }.fail(), // Err(Error::PermissionDenied(msg)),
+            Status::Failure => builder::SFtpFailure { tip: msg }.fail(), // Err(Error::SFtpFailure(msg)),
+            Status::BadMessage => builder::BadMessage { tip: msg }.fail(), // Err(Error::BadMessage(msg)),
+            Status::NoConnection => builder::NoConnection { tip: msg }.fail(), // Err(Error::NoConnection(msg)),
+            Status::ConnectionLost => builder::NoConnection { tip: msg }.fail(), // Err(Error::ConnectionLost(msg)),
+            Status::OpUnsupported => builder::OpUnsupported { tip: msg }.fail(), // Err(Error::OpUnsupported(msg)),
         }
     }
 
     fn no_ok<T: Default>(&self, msg: String) -> Result<T> {
         match self {
-            Status::OK => Err(Error::ProtocolError(
+            Status::OK =>
+            /* Err(Error::ProtocolError(
                 "Unexpected Ok status received".to_string(),
-            )),
+            )) */
+            {
+                builder::Protocol {
+                    tip: "Unexpected Ok status received",
+                }
+                .fail()
+            }
             Status::Eof => Ok(Default::default()),
-            Status::NoSuchFile => Err(Error::NoSuchFile(msg)),
-            Status::PermissionDenied => Err(Error::PermissionDenied(msg)),
-            Status::Failure => Err(Error::SFtpFailure(msg)),
-            Status::BadMessage => Err(Error::BadMessage(msg)),
-            Status::NoConnection => Err(Error::NoConnection(msg)),
-            Status::ConnectionLost => Err(Error::ConnectionLost(msg)),
-            Status::OpUnsupported => Err(Error::OpUnsupported(msg)),
+            Status::NoSuchFile => builder::NoSuchFile { tip: msg }.fail(), //   Err(Error::NoSuchFile(msg)),
+            Status::PermissionDenied => builder::PermissionDenied { tip: msg }.fail(), // Err(Error::PermissionDenied(msg)),
+            Status::Failure => builder::SFtpFailure { tip: msg }.fail(), // Err(Error::SFtpFailure(msg)),
+            Status::BadMessage => builder::BadMessage { tip: msg }.fail(), // Err(Error::BadMessage(msg)),
+            Status::NoConnection => builder::NoConnection { tip: msg }.fail(), // Err(Error::NoConnection(msg)),
+            Status::ConnectionLost => builder::NoConnection { tip: msg }.fail(), // Err(Error::ConnectionLost(msg)),
+            Status::OpUnsupported => builder::OpUnsupported { tip: msg }.fail(), // Err(Error::OpUnsupported(msg)),
         }
     }
 }
@@ -610,7 +639,9 @@ impl SFtp {
         let session = channel.session();
         let request = Request::SFtpFromChannel { channel, sender };
 
-        session.send(request).map_err(|_| Error::Disconnected)?;
+        session
+            .send(request)
+            .map_err(|_| builder::Disconnected.build())?;
 
         recver.await?
     }
@@ -689,9 +720,13 @@ impl SFtp {
 
         match packet.msg {
             Message::Status { status, msg, _tag } => status.no_ok_and_eof(msg),
-            Message::ExtendReply(data) => Statvfs::parse(&data)
-                .ok_or(Error::ProtocolError("Invalid Statvfs Message".to_string())),
-            _ => Err(Error::ProtocolError("Unexpected SFtp Message".to_string())),
+            Message::ExtendReply(data) => Statvfs::parse(&data).context(builder::Protocol {
+                tip: "Invalid Statvfs Message",
+            }),
+            _ => builder::Protocol {
+                tip: "Unexpected SFtp Message",
+            }
+            .fail(), // _ => Err(Error::ProtocolError("Unexpected SFtp Message".to_string())),
         }
     }
 
@@ -723,9 +758,13 @@ impl SFtp {
 
         match packet.msg {
             Message::Status { status, msg, _tag } => status.no_ok_and_eof(msg),
-            Message::ExtendReply(data) => Statvfs::parse(&data)
-                .ok_or(Error::ProtocolError("Invalid Statvfs Message".to_string())),
-            _ => Err(Error::ProtocolError("Unexpected SFtp Message".to_string())),
+            Message::ExtendReply(data) => Statvfs::parse(&data).context(builder::Protocol {
+                tip: "Invalid Statvfs Message",
+            }),
+            _ => builder::Protocol {
+                tip: "Unexpected SFtp Message",
+            }
+            .fail(), // _ => Err(Error::ProtocolError("Unexpected SFtp Message".to_string())),
         }
     }
 
@@ -839,11 +878,13 @@ impl SFtp {
         let packet = self.wait_for_packet(request_id).await?;
 
         match packet.msg {
-            Message::ExtendReply(data) => Limits::parse(&data)
-                .ok_or(Error::ProtocolError("Invalid packet format".to_string())),
-            _ => Err(Error::ProtocolError(
-                "Unexpect message from server".to_string(),
-            )),
+            Message::ExtendReply(data) => Limits::parse(&data).context(builder::Protocol {
+                tip: "Invalid packet format",
+            }),
+            _ => builder::Protocol {
+                tip: "Unexpected SFtp Message",
+            }
+            .fail(),
         }
     }
 
@@ -879,7 +920,8 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Name(infos) if infos.len() == 1 => Ok(infos[0].filename.clone()),
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            // _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(),
         }
     }
 
@@ -964,7 +1006,11 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, _tag } => status.no_ok_and_eof(msg),
             Message::Name(infos) if infos.len() == 1 => Ok(infos[0].filename.clone()),
-            _ => Err(Error::ProtocolError("Unexpected message".to_string())),
+            // _ => Err(Error::ProtocolError("Unexpected message".to_string())),
+            _ => builder::Protocol {
+                tip: "Unexpected message",
+            }
+            .fail(),
         }
     }
 
@@ -1013,17 +1059,17 @@ impl SFtp {
                 let buffer = Buffer::from_slice(&data);
                 let usernames = buffer
                     .take_one()
-                    .ok_or(Error::ProtocolError(
-                        "Invalid sftp packet format".to_string(),
-                    ))?
+                    .context(builder::Protocol {
+                        tip: "Invalid sftp packet format",
+                    })?
                     .1;
                 let usernames = Buffer::from_slice(usernames);
 
                 let groupnames = buffer
                     .take_one()
-                    .ok_or(Error::ProtocolError(
-                        "Invalid sftp packet format".to_string(),
-                    ))?
+                    .context(builder::Protocol {
+                        tip: "Invalid sftp packet format",
+                    })?
                     .1;
                 let groupnames = Buffer::from_slice(groupnames);
 
@@ -1042,7 +1088,10 @@ impl SFtp {
 
                 Ok((unames, gnames))
             }
-            _ => Err(Error::ProtocolError("Unexpected message".to_string())),
+            _ => builder::Protocol {
+                tip: "Unexpected message",
+            }
+            .fail(), //Err(Error::ProtocolError("Unexpected message".to_string())),
         }
     }
 
@@ -1144,7 +1193,7 @@ impl SFtp {
                     datas.push(vec![]);
                 }
                 Message::Status { status, msg, .. } => return status.no_ok(msg),
-                _ => return Err(Error::ProtocolError("Unknown msg".to_string())),
+                _ => return builder::Protocol { tip: "Unknown msg" }.fail(), // return Err(Error::ProtocolError("Unknown msg".to_string())),
             }
         }
 
@@ -1190,7 +1239,7 @@ impl SFtp {
                 Ok(data)
             }
             Message::Status { status, msg, .. } => status.no_ok(msg),
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -1297,7 +1346,8 @@ impl SFtp {
         match packet.msg {
             // Message::Status { status, .. } if status == Status::OK => Ok(()),
             Message::Status { status, msg, .. } => f(&status, msg),
-            _ => Err(Error::ProtocolError("Unknown msg received".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
+                                                                  // _ => Err(Error::ProtocolError("Unknown msg received".to_string())),
         }
     }
 
@@ -1350,7 +1400,7 @@ impl SFtp {
             Message::FileHandle(handle) => Ok(Dir::new(handle)),
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
 
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -1391,7 +1441,8 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok(msg),
             Message::Name(infos) => Ok(infos),
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
+                                                                  // _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -1411,7 +1462,8 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
+                                                                  // _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -1431,7 +1483,8 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
+                                                                  // _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -1450,7 +1503,8 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Attributes(attrs) => Ok(attrs),
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
+                                                                  // _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -1523,7 +1577,8 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Name(mut infos) if infos.len() == 1 => Ok(infos.remove(0)),
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
+                                                                  // _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -1571,7 +1626,8 @@ impl SFtp {
         match packet.msg {
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
             Message::Name(infos) if infos.len() == 1 => Ok(infos[0].filename.clone()),
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
+                                                                  // _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 
@@ -1661,7 +1717,8 @@ impl SFtp {
             Message::FileHandle(handle) => Ok(File::new(handle)),
             Message::Status { status, msg, .. } => status.no_ok_and_eof(msg),
 
-            _ => Err(Error::ProtocolError("Unknown msg".to_string())),
+            _ => builder::Protocol { tip: "Unknown msg" }.fail(), //Err(Error::ProtocolError("Unknown msg".to_string())),
+                                                                  // _ => Err(Error::ProtocolError("Unknown msg".to_string())),
         }
     }
 

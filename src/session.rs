@@ -14,6 +14,7 @@ use crate::cipher::kex::Dependency;
 
 use crate::cipher::sign;
 
+use crate::error::builder;
 use crate::error::Error;
 use crate::error::Result;
 use crate::forward::Listener;
@@ -44,7 +45,7 @@ macro_rules! channel_loop {
             match $sel.recv_msg().await? {
                 Message::ChannelClose(recipient) if recipient == $id => {
                     $sel.handle_channel_close(recipient).await?;
-                    return Err(Error::ChannelClosed);
+                    return  builder::ChannelClosed.fail();//Err(Error::ChannelClosed);
                 }
                 $(
                     $e $( if $c )? => $h,
@@ -144,7 +145,9 @@ impl Session {
     }
 
     fn send_request(&self, msg: Request) -> Result<()> {
-        self.sender.send(msg).map_err(|_| Error::Disconnected)
+        self.sender
+            .send(msg)
+            .map_err(|_| builder::Disconnected.build())
     }
 
     fn manually_drop(&mut self) {
@@ -366,7 +369,9 @@ impl Session {
             sender,
         };
 
-        self.sender.send(request).map_err(|_| Error::Disconnected)?;
+        self.sender
+            .send(request)
+            .map_err(|_| builder::Disconnected.build())?;
         recver.await?
     }
 
@@ -427,18 +432,24 @@ impl Session {
             .hostkey
             .verify(&result.server_signature, &result.client_hash)?;
 
-        if !res {
-            return Err(Error::HostKeyVerifyFailed);
-        }
+        // if !res {
+        // return Err(Error::HostKeyVerifyFailed);
+        // }
+
+        snafu::ensure!(res, builder::HostKeyVerifyFailed);
 
         if let Some(ref mut behavior) = config.behavior {
             if !behavior
                 .verify_server_hostkey(algo.hostkey.name(), &result.server_hostkey)
                 .await?
             {
-                return Err(Error::RejectByUser(
-                    "Server public key rejected by user".to_string(),
-                ));
+                // return Err(Error::RejectByUser(
+                //     "Server public key rejected by user".to_string(),
+                // ));
+                return builder::RejectByUser {
+                    tip: "Server public key rejected by user",
+                }
+                .fail();
             }
         }
 
@@ -638,7 +649,7 @@ where
                 if let Some(behavior) = self.behaviour() {
                     behavior.disconnect(reason, &description, &tag).await?;
                 }
-                return Err(Error::Disconnected);
+                return builder::Disconnected.fail(); //Err(Error::Disconnected);
             }
             Message::Ping(data) => {
                 self.session_pong(data).await?;
@@ -672,7 +683,10 @@ where
                 }
             }
             Message::Unimplemented(seqno) => {
-                return Err(Error::Unimplemented(seqno));
+                return builder::Unimplemented {
+                    sequence_number: seqno,
+                }
+                .fail();
             }
             Message::ForwardTcpIp {
                 sender,
@@ -763,18 +777,23 @@ where
             .hostkey
             .verify(&result.server_signature, &result.client_hash)?;
 
-        if !res {
-            return Err(Error::HostKeyVerifyFailed);
-        }
+        // if !res {
+        //     return Err(Error::HostKeyVerifyFailed);
+        // }
+        snafu::ensure!(res, builder::HostKeyVerifyFailed);
 
         if let Some(behavior) = self.behaviour() {
             if !behavior
                 .verify_server_hostkey(algo.hostkey.name(), &result.server_hostkey)
                 .await?
             {
-                return Err(Error::RejectByUser(
-                    "Server public key rejected by user".to_string(),
-                ));
+                // return Err(Error::RejectByUser(
+                //     "Server public key rejected by user".to_string(),
+                // ));
+                return builder::RejectByUser {
+                    tip: "Server public key rejected by user",
+                }
+                .fail();
             }
         }
 
@@ -1282,18 +1301,23 @@ where
             .hostkey
             .verify(&result.server_signature, &result.client_hash)?;
 
-        if !res {
-            return Err(Error::HostKeyVerifyFailed);
-        }
+        // if !res {
+        //     return Err(Error::HostKeyVerifyFailed);
+        // }
+        snafu::ensure!(res, builder::HostKeyVerifyFailed);
 
         if let Some(behavior) = self.behaviour() {
             if !behavior
                 .verify_server_hostkey(algo.hostkey.name(), &result.server_hostkey)
                 .await?
             {
-                return Err(Error::RejectByUser(
-                    "Server public key rejected by user".to_string(),
-                ));
+                // return Err(Error::RejectByUser(
+                //     "Server public key rejected by user".to_string(),
+                // ));
+                return builder::RejectByUser {
+                    tip: "Server public key rejected by user",
+                }
+                .fail();
             }
         }
 
@@ -1355,7 +1379,8 @@ where
             id,
             Message::ChannelSuccess(recipient) if recipient == id => return Ok(()),
             Message::ChannelFailure(recipient) if recipient == id => {
-                return Err(Error::ChannelFailure);
+                // return Err(Error::ChannelFailure);
+                return builder::ChannelFailure.fail();
             },
         );
     }
@@ -1531,7 +1556,8 @@ where
             id,
             Message::ChannelSuccess(recipient) if recipient == id => return Ok(()),
             Message::ChannelFailure(recipient) if recipient == id => {
-                return Err(Error::ChannelFailure);
+                // return Err(Error::ChannelFailure);
+                return builder::ChannelFailure.fail();
             },
         );
     }
@@ -1579,7 +1605,7 @@ where
                     reson,
                     desc,
                     ..
-                } if recipient == client_id => Err(Error::ChannelOpenFail(reson, desc)),
+                } if recipient == client_id => builder::ChannelOpenFail { reson, desc }.fail(),
                 Message::ChannelOpenConfirmation {
                     recipient,
                     sender,
@@ -1637,9 +1663,13 @@ where
                     return Ok(());
                 }
                 Some(SSH_MSG_REQUEST_FAILURE) => {
-                    return Err(Error::RequestFailure(
-                        "Failed to cancel tcpip forward".to_string(),
-                    ));
+                    // return Err(Error::RequestFailure(
+                    //     "Failed to cancel tcpip forward".to_string(),
+                    // ));
+                    return builder::RequestFailure {
+                        tip: "Failed to cancel tcpip forward",
+                    }
+                    .fail();
                 }
                 None => return Err(Error::invalid_format("Invalid code")),
                 _ => {
@@ -1697,7 +1727,11 @@ where
                     return Ok(Listener::new(session, recver, address));
                 }
                 Some(SSH_MSG_REQUEST_FAILURE) => {
-                    return Err(Error::RequestFailure("Failed to tcpip forward".to_string()));
+                    // return Err(Error::RequestFailure("Failed to tcpip forward".to_string()));
+                    return builder::RequestFailure {
+                        tip: "Failed to tcpip forward",
+                    }
+                    .fail();
                 }
                 None => return Err(Error::invalid_format("Invalid code")),
                 _ => {
@@ -1731,7 +1765,8 @@ where
             id,
             Message::ChannelSuccess(recipient) if recipient == id => return Ok(()),
             Message::ChannelFailure(recipient) if recipient == id => {
-                return Err(Error::ChannelFailure);
+                // return Err(Error::ChannelFailure);
+                return builder::ChannelFailure.fail();
             },
         );
     }
@@ -1783,7 +1818,8 @@ where
             id,
             Message::ChannelSuccess(recipient) if recipient == id => return Ok(()),
             Message::ChannelFailure(recipient) if recipient == id => {
-                return Err(Error::ChannelFailure);
+                // return Err(Error::ChannelFailure);
+                return builder::ChannelFailure.fail();
             },
         );
     }
@@ -1796,11 +1832,13 @@ where
             .ok_or(Error::ub("Failed to find channel"))?;
 
         if channel.client.closed || channel.server.closed {
-            return Err(Error::ChannelClosed);
+            // return Err(Error::ChannelClosed);
+            return builder::ChannelClosed.fail();
         }
 
         if channel.client.eof {
-            return Err(Error::ChannelEof);
+            // return Err(Error::ChannelEof);
+            return builder::ChannelEof.fail();
         }
 
         // channel.stdout_buf.extend(data);
@@ -1911,9 +1949,13 @@ where
     async fn handle_channel_close(&mut self, id: u32) -> Result<()> {
         let mut channel = self.remove_channel(id)?;
         if channel.server.closed {
-            return Err(Error::ProtocolError(
-                "The channel is already closed".to_string(),
-            ));
+            // return Err(Error::ProtocolError(
+            //     "The channel is already closed".to_string(),
+            // ));
+            return builder::Protocol {
+                tip: "The channel is already closed",
+            }
+            .fail();
         }
 
         channel.server_close();
@@ -1990,7 +2032,8 @@ where
             id,
             Message::ChannelSuccess(recipient) if recipient == id => return Ok(()),
             Message::ChannelFailure(recipient) if recipient == id => {
-                return Err(Error::ChannelFailure);
+                // return Err(Error::ChannelFailure);
+                return builder::ChannelFailure.fail();
             },
         );
     }
@@ -2025,7 +2068,7 @@ where
                     reson,
                     desc,
                     ..
-                } if recipient == client_id => Err(Error::ChannelOpenFail(reson, desc)),
+                } if recipient == client_id => builder::ChannelOpenFail { reson, desc }.fail(),
                 Message::ChannelOpenConfirmation {
                     recipient,
                     sender,
@@ -2339,7 +2382,7 @@ where
             self,
             client_id,
             Message::ChannelSuccess(recipient) if recipient == client_id => break,
-            Message::ChannelFailure(recipient) if recipient == client_id => return Err(Error::SubsystemFailed),
+            Message::ChannelFailure(recipient) if recipient == client_id => return builder::SubsystemFailed.fail(), //Err(Error::SubsystemFailed),
         );
 
         let mut buffer = Buffer::new();
@@ -2359,10 +2402,12 @@ where
             let msg = self.recv_msg().await?;
             match msg {
                 Message::ChannelClose(recipient) if recipient == client_id => {
-                    break Err(Error::ChannelClosed);
+                    // break Err(Error::ChannelClosed);
+                    break builder::ChannelClosed.fail();
                 }
                 Message::ChannelEof(recipient) if recipient == client_id => {
-                    break Err(Error::ChannelEof);
+                    // break Err(Error::ChannelEof);
+                    break builder::ChannelEof.fail();
                 }
                 Message::ChannelStdoutData { recipient, data } if recipient == client_id => {
                     let data = Buffer::from_slice(&data);
@@ -2377,9 +2422,13 @@ where
                         .ok_or(Error::invalid_format("Invalid ssh packet"))?;
 
                     if value != SSH_FXP_VERSION {
-                        return Err(Error::ProtocolError(
-                            "Unable to receive SFtp version".to_string(),
-                        ));
+                        // return Err(Error::ProtocolError(
+                        //     "Unable to receive SFtp version".to_string(),
+                        // ));
+                        return builder::Protocol {
+                            tip: "Unable to receive SFtp version",
+                        }
+                        .fail();
                     }
 
                     let version = data

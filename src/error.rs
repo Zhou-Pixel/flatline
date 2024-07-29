@@ -2,107 +2,240 @@ use std::{io, str::Utf8Error};
 
 use super::channel::ChannelOpenFailureReson;
 use openssl::error::ErrorStack;
-use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
 
 pub type Result<T> = std::result::Result<T, Error>;
+#[cfg(feature = "backtrace")]
+use snafu::Backtrace;
+use snafu::{IntoError, Snafu};
 
-#[derive(Error, Debug)]
+#[derive(Snafu, Debug)]
+#[snafu(module(builder), context(suffix(false)), visibility(pub))]
 pub enum Error {
-    #[error("Openssl error")]
-    OpensslError(#[from] ErrorStack),
+    #[snafu(display("Openssl error"))]
+    OpensslError {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        source: ErrorStack,
+    },
 
-    #[error("Standard io error")]
-    IOError(#[from] io::Error),
+    #[snafu(display("Standard io error: {source}"))]
+    IOError {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        source: io::Error,
+    },
 
-    #[error("UndefinedBehavior: {0}")]
-    UndefinedBehavior(String),
+    #[snafu(display("UndefinedBehavior: {tip}"))]
+    UndefinedBehavior {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("Failed to Decode binary data as utf8")]
-    Utf8Error(#[from] Utf8Error),
+    #[snafu(display("Failed to Decode binary data as utf8"))]
+    Utf8Error {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        source: Utf8Error,
+    },
 
-    #[error("The peer does not support ssh2")]
-    Ssh2Unsupport,
+    #[snafu(display("The peer does not support ssh2"))]
+    Ssh2Unsupport {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Protocol error: {0}")]
-    ProtocolError(String),
+    #[snafu(display("Protocol error: {tip}"))]
+    ProtocolError {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("Algorithm negotiation failed")]
-    NegotiationFailed,
+    #[snafu(display("Algorithm negotiation failed"))]
+    NegotiationFailed {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Banner exchange failed: {0}")]
-    BannerExchange(String),
+    #[snafu(display("Banner exchange failed: {tip}"))]
+    BannerTooLong {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("Server connection lost")]
-    Disconnected,
+    #[snafu(display("Server connection lost"))]
+    Disconnected {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Server Message mac verification failed")]
-    MacVerificationFailed,
+    #[snafu(display("Server Message mac verification failed"))]
+    MacVerificationFailed {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Channel open failed")]
-    ChannelOpenFail(ChannelOpenFailureReson, String),
+    #[snafu(display("Channel open failed"))]
+    ChannelOpenFail {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        reson: ChannelOpenFailureReson,
+        desc: String,
+    },
 
-    #[error("Channel failed")]
-    ChannelFailure,
+    #[snafu(display("SSH Channel Failure"))]
+    ChannelFailure {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    // #[error("internal error: failed to find channel")]
+    // #[snafu(display("internal error: failed to find channel")]
     // ChannelNotFound,
-    #[error("error code: {0:?} {1}")]
-    ScpError(Option<u8>, String),
+    #[snafu(display("Error code: {code:?} {tip}"))]
+    ScpError {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        code: Option<u8>,
+        tip: String,
+    },
 
-    #[error("Channel was closed")]
-    ChannelClosed,
+    #[snafu(display("Channel was closed"))]
+    ChannelClosed {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Channel end of file")]
-    ChannelEof,
+    #[snafu(display("Channel end of file"))]
+    ChannelEof {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Failed to verify hostkey")]
-    HostKeyVerifyFailed,
+    #[snafu(display("Failed to verify hostkey"))]
+    HostKeyVerifyFailed {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Failed to request subsystem from server")]
-    SubsystemFailed,
+    #[snafu(display("Failed to request subsystem from server"))]
+    SubsystemFailed {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Resource is temporarily unavailable")]
-    TemporarilyUnavailable,
+    #[snafu(display("Resource is temporarily unavailable"))]
+    TemporarilyUnavailable {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Uncompress or Compress Error")]
-    CompressFailed,
+    #[snafu(display("Uncompress or Compress Error"))]
+    CompressFailed {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
 
-    #[error("Failed to parse binary: {0}")]
-    InvalidFormat(String),
+    #[snafu(display("Failed to parse binary: {tip}"))]
+    InvalidFormat {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("The packet with sequence number {0} was rejected by the server")]
-    Unimplemented(u32),
+    #[snafu(display(
+        "The packet with sequence number {sequence_number} was rejected by the server"
+    ))]
+    Unimplemented {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        sequence_number: u32,
+    },
 
-    #[error("User reject: {0}")]
-    RejectByUser(String),
+    #[snafu(display("User reject: {tip}"))]
+    RejectByUser {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("Invalid Argument: {0}")]
-    InvalidArgument(String),
+    #[snafu(display("Invalid Argument: {tip}"))]
+    InvalidArgument {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("SFtp: {0}")]
-    NoSuchFile(String),
+    #[snafu(display("SFtp: {tip}"))]
+    NoSuchFile {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("SFtp: {0}")]
-    PermissionDenied(String),
+    #[snafu(display("SFtp: {tip}"))]
+    PermissionDenied {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("SFtp: {0}")]
-    SFtpFailure(String),
+    #[snafu(display("SFtp: {tip}"))]
+    SFtpFailure {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("SFtp: {0}")]
-    BadMessage(String),
+    #[snafu(display("SFtp: {tip}"))]
+    BadMessage {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("SFtp: {0}")]
-    NoConnection(String),
+    #[snafu(display("SFtp: {tip}"))]
+    NoConnection {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("SFtp: {0}")]
-    ConnectionLost(String),
+    #[snafu(display("SFtp: {tip}"))]
+    ConnectionLost {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("SFtp: {0}")]
-    OpUnsupported(String),
+    #[snafu(display("SFtp: {tip}"))]
+    OpUnsupported {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 
-    #[error("Failed to Request: {0}")]
-    RequestFailure(String),
+    #[snafu(display("Failed to Request: {tip}"))]
+    RequestFailure {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
+
+    #[snafu(display("Calling recv on a channel with an None receiver"))]
+    ChannelReceiverIsNone {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+    },
+
+    #[snafu(display("Other error: {tip}"))]
+    Other {
+        #[cfg(feature = "backtrace")]
+        backtrace: Backtrace,
+        tip: String,
+    },
 }
 
 // struct Unexpect {
@@ -112,7 +245,7 @@ pub enum Error {
 
 impl Error {
     pub fn ub(tip: impl Into<String>) -> Self {
-        Self::UndefinedBehavior(tip.into())
+        builder::UndefinedBehavior { tip }.build()
     }
 
     // pub fn ssh_packet_parse(tip: impl Into<String>) -> Self {
@@ -120,16 +253,38 @@ impl Error {
     // }
 
     pub fn scp_error(code: Option<u8>, tip: impl Into<String>) -> Self {
-        Self::ScpError(code, tip.into())
+        builder::Scp { code, tip }.build()
     }
 
     pub fn invalid_format(tip: impl Into<String>) -> Self {
-        Self::InvalidFormat(tip.into())
+        builder::InvalidFormat { tip }.build()
+    }
+
+    pub fn other(tip: impl Into<String>) -> Self {
+        builder::Other { tip }.build()
     }
 }
 
 impl From<RecvError> for Error {
     fn from(_: RecvError) -> Self {
-        Self::Disconnected
+        builder::Disconnected.build()
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        builder::IO.into_error(value)
+    }
+}
+
+impl From<Utf8Error> for Error {
+    fn from(value: Utf8Error) -> Self {
+        builder::Utf8.into_error(value)
+    }
+}
+
+impl From<ErrorStack> for Error {
+    fn from(value: ErrorStack) -> Self {
+        builder::Openssl.into_error(value)
     }
 }

@@ -4,6 +4,7 @@ use std::io;
 
 use super::{common::PACKET_MAXIMUM_SIZE, packet::Packet};
 
+use crate::error::builder;
 use crate::{cipher::compress::Encode, error::Error};
 use crate::{
     cipher::{compress::Decode, crypt::Decrypt},
@@ -11,6 +12,7 @@ use crate::{
 };
 use bytes::{BufMut, BytesMut};
 use openssl::rand::rand_bytes;
+use snafu::ResultExt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[async_trait::async_trait]
@@ -380,7 +382,7 @@ where
 
         let mut rand_padding = vec![0u8; padding_len];
 
-        rand_bytes(&mut rand_padding)?;
+        rand_bytes(&mut rand_padding).context(builder::Openssl)?;
 
         let packet_len = payload_len + padding_len + 1;
 
@@ -703,9 +705,11 @@ where
 
             // server_mac.reset()?;
 
-            if &cal != mac {
-                return Err(Error::MacVerificationFailed);
-            }
+            snafu::ensure!(&cal == mac, builder::MacVerificationFailed);
+
+            // if &cal != mac {
+            //     return Err(Error::MacVerificationFailed);
+            // }
         }
 
         self.updated = false;
@@ -800,7 +804,7 @@ where
         let mut rand_padding = vec![0u8; padding_len];
 
         // 生成随机padding
-        rand_bytes(&mut rand_padding)?;
+        rand_bytes(&mut rand_padding).context(builder::Openssl)?;
 
         packet.put_u8(padding_len as u8);
 
