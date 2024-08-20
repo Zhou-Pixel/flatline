@@ -322,7 +322,7 @@ where
     pub async fn recv_packet(&mut self) -> Result<Packet> {
         // let size = self.stream.read_exact(size_of::<u32>()).await?;
         let size = self.stream.fill(4).await?;
-        let size = u32::from_be_bytes([size[0], size[1], size[2], size[3]]);
+        let size = u32::from_be_bytes(size.try_into().unwrap());
         // let mut size = Buffer::from_vec(size);
         // let size = size.take_u32().unwrap();
         if size as usize > PACKET_MAXIMUM_SIZE - 4 {
@@ -505,13 +505,13 @@ where
             // let aad = self.stream.read_exact(4).await?;
             let mut plain_text = vec![];
             let size = match self.header {
-                Some(ref aad) => u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]),
+                Some(ref aad) => u32::from_be_bytes(aad[..].try_into().unwrap()),
                 None => {
                     let mut aad = self.stream.read_exact(4).await?;
 
                     self.decrypt.aad_update(&mut aad)?;
 
-                    let size = u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]);
+                    let size = u32::from_be_bytes(aad[..].try_into().unwrap());
 
                     self.header = Some(aad);
                     size
@@ -581,14 +581,12 @@ where
             (size, plain_text, mac)
         } else if self.server.mac.encrypt_then_mac() {
             let len = match self.header {
-                Some(ref header) => {
-                    u32::from_be_bytes([header[0], header[1], header[2], header[3]])
-                }
+                Some(ref header) => u32::from_be_bytes(header[..].try_into().unwrap()),
                 None => {
                     // let packet_len = self.stream.fill(4).await?;
                     let aad = self.stream.read_exact(4).await?;
 
-                    let len = u32::from_be_bytes([aad[0], aad[1], aad[2], aad[3]]);
+                    let len = u32::from_be_bytes(aad[..].try_into().unwrap());
 
                     self.header = Some(aad);
 
@@ -643,7 +641,7 @@ where
 
             let header = self.header.as_ref().unwrap();
 
-            let pakcet_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+            let pakcet_size = u32::from_be_bytes(header[..].try_into().unwrap());
 
             if pakcet_size as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(

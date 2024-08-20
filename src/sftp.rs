@@ -216,6 +216,7 @@ pub struct SFtp {
     request_id: u32,
     version: u32,
     ext: HashMap<String, Vec<u8>>,
+    packets: HashMap<u32, Packet>,
 }
 
 impl SFtp {
@@ -225,6 +226,7 @@ impl SFtp {
             request_id: 0,
             version,
             ext,
+            packets: Default::default(),
         }
     }
 }
@@ -1732,23 +1734,29 @@ impl SFtp {
     }
 
     async fn wait_for_packet(&mut self, id: u32) -> Result<Packet> {
+        let packet = self.packets.remove(&id);
+        if let Some(packet) = packet {
+            return Ok(packet);
+        }
         loop {
             let packet = self.recv().await?;
             if packet.id == id {
                 return Ok(packet);
             }
-            println!("ignore packet: {:?}", packet);
+            self.packets.insert(packet.id, packet);
         }
     }
 
     async fn recv(&mut self) -> Result<Packet> {
         let data = self.channel.fill(4).await?;
 
-        let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let len = u32::from_be_bytes(data.try_into().unwrap());
 
         let data = self.channel.fill(4 + len as usize).await?;
 
-        let res = Packet::parse(data).ok_or(Error::invalid_format("unable to parse sftp packet"));
+        let res = Packet::parse(data).context(builder::InvalidArgument {
+            tip: "unable to parse sftp packet",
+        });
         self.channel.consume(4 + len as usize);
         res
     }

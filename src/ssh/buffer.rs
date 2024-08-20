@@ -123,27 +123,17 @@ impl<'a> Buffer<Cell<&'a [u8]>> {
     }
 
     pub fn take_u32(&self) -> Option<u32> {
-        if self.len() < size_of::<u32>() {
-            None
-        } else {
-            let tmp = self.0.get();
-            let ret = u32::from_be_bytes([tmp[0], tmp[1], tmp[2], tmp[3]]);
-            self.0.set(&tmp[4..]);
-            Some(ret)
-        }
+        let tmp = self.0.get();
+        let ret = u32::from_be_bytes(tmp.try_into().ok()?);
+        self.0.set(&tmp[4..]);
+        Some(ret)
     }
 
     pub fn take_u64(&self) -> Option<u64> {
-        if self.len() < size_of::<u64>() {
-            None
-        } else {
-            let tmp = self.0.get();
-            let ret = u64::from_be_bytes([
-                tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6], tmp[7],
-            ]);
-            self.0.set(&tmp[8..]);
-            Some(ret)
-        }
+        let tmp = self.0.get();
+        let ret = u64::from_be_bytes(tmp.try_into().ok()?);
+        self.0.set(&tmp[8..]);
+        Some(ret)
     }
 
     pub fn take_bytes(&self, len: usize) -> Option<&'a [u8]> {
@@ -226,11 +216,7 @@ impl Buffer<Vec<u8>> {
     }
 
     pub fn take_u32(&mut self) -> Option<u32> {
-        if self.0.len() < size_of::<u32>() {
-            return None;
-        }
-
-        let num = u32::from_be_bytes([self.0[0], self.0[1], self.0[2], self.0[3]]);
+        let num = u32::from_be_bytes(self.0[..].try_into().ok()?);
 
         self.0.drain(..size_of::<u32>());
 
@@ -255,11 +241,7 @@ impl Buffer<Vec<u8>> {
     }
 
     pub fn take_one(&mut self) -> Option<(u32, Vec<u8>)> {
-        if self.0.len() < size_of::<u32>() {
-            return None;
-        }
-
-        let size = u32::from_be_bytes([self.0[0], self.0[1], self.0[2], self.0[3]]);
+        let size = u32::from_be_bytes(self.0[..].try_into().ok()?);
 
         if self.0.len() < size as usize + 4 {
             return None;

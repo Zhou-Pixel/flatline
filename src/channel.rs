@@ -1,6 +1,7 @@
 use crate::error::builder;
 
 use super::ssh::common::code::*;
+use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use derive_new::new;
@@ -446,7 +447,7 @@ impl BufferChannel {
     }
 
     pub(crate) fn consume(&mut self, len: usize) {
-        drop(self.stdout.split_to(len));
+        self.stdout.advance(len);
     }
 
     pub(crate) async fn write(&mut self, data: impl AsRef<[u8]>) -> Result<()> {
@@ -472,7 +473,7 @@ impl BufferChannel {
         while !self.stdin.is_empty() {
             let len = self.channel.write(self.stdin.to_vec()).await?;
 
-            drop(self.stdin.split_to(len));
+            self.stdin.advance(len)
         }
         Ok(())
     }
@@ -481,7 +482,7 @@ impl BufferChannel {
         while !self.stdin.is_empty() {
             let len = self.channel.write(self.stdin.to_vec()).await?;
 
-            drop(self.stdin.split_to(len));
+            self.stdin.advance(len);
         }
         Ok(())
     }
