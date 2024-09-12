@@ -1755,7 +1755,7 @@ impl SFtp {
         let data = self.channel.fill(4 + len as usize).await?;
 
         let res = Packet::parse(data).context(builder::InvalidArgument {
-            tip: "unable to parse sftp packet",
+            tip: "Unable to parse sftp packet",
         });
         self.channel.consume(4 + len as usize);
         res

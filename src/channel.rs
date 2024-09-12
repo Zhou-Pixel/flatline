@@ -37,6 +37,12 @@ impl ChannelOpenFailureReson {
 #[derive(Debug, Clone)]
 pub struct Signal(pub String);
 
+impl ToString for Signal {
+    fn to_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
 impl PartialEq<&str> for Signal {
     fn eq(&self, other: &&str) -> bool {
         self.0 == *other

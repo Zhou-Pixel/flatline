@@ -641,7 +641,7 @@ where
 
             let header = self.header.as_ref().unwrap();
 
-            let pakcet_size = u32::from_be_bytes(header[..].try_into().unwrap());
+            let pakcet_size = u32::from_be_bytes(header[..4].try_into().unwrap());
 
             if pakcet_size as usize > PACKET_MAXIMUM_SIZE - 4 {
                 return Err(Error::invalid_format(format!(

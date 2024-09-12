@@ -6,14 +6,15 @@ use tokio::net::TcpStream;
 include!("./user.conf");
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() {
-    let socket = TcpStream::connect(HOST).await.unwrap();
+async fn main() -> flatline::error::Result<()> {
+    let socket = TcpStream::connect(HOST).await?;
     let config = Config::deafult_with_behavior();
-    let session = Session::handshake(config, socket).await.unwrap();
+    let session = Session::handshake(config, socket).await?;
 
-    let status = session.userauth_password(USERNAME, PASSWORD).await.unwrap();
+    let status = session.userauth_password(USERNAME, PASSWORD).await?;
 
     assert!(matches!(status, Userauth::Success));
 
-    session.disconnect_default().await.unwrap();
+    session.disconnect_default().await?;
+    Ok(())
 }

@@ -124,15 +124,23 @@ impl<'a> Buffer<Cell<&'a [u8]>> {
 
     pub fn take_u32(&self) -> Option<u32> {
         let tmp = self.0.get();
-        let ret = u32::from_be_bytes(tmp.try_into().ok()?);
-        self.0.set(&tmp[4..]);
+        let u32_len = size_of::<u32>();
+        if tmp.len() < u32_len {
+            return None;
+        }
+        let ret = u32::from_be_bytes(tmp[..u32_len].try_into().unwrap());
+        self.0.set(&tmp[u32_len..]);
         Some(ret)
     }
 
     pub fn take_u64(&self) -> Option<u64> {
         let tmp = self.0.get();
-        let ret = u64::from_be_bytes(tmp.try_into().ok()?);
-        self.0.set(&tmp[8..]);
+        let u64_len = size_of::<u64>();
+        if tmp.len() < u64_len {
+            return None;
+        }
+        let ret = u64::from_be_bytes(tmp[..u64_len].try_into().unwrap());
+        self.0.set(&tmp[u64_len..]);
         Some(ret)
     }
 
@@ -216,9 +224,13 @@ impl Buffer<Vec<u8>> {
     }
 
     pub fn take_u32(&mut self) -> Option<u32> {
-        let num = u32::from_be_bytes(self.0[..].try_into().ok()?);
+        let u32_len = size_of::<u32>();
+        if self.0.len() < u32_len {
+            return None;
+        }
+        let num = u32::from_be_bytes(self.0[..u32_len].try_into().unwrap());
 
-        self.0.drain(..size_of::<u32>());
+        self.0.drain(..u32_len);
 
         Some(num)
     }
@@ -241,13 +253,17 @@ impl Buffer<Vec<u8>> {
     }
 
     pub fn take_one(&mut self) -> Option<(u32, Vec<u8>)> {
-        let size = u32::from_be_bytes(self.0[..].try_into().ok()?);
+        let u32_len = size_of::<u32>();
+        if self.0.len() < u32_len {
+            return None;
+        }
+        let size = u32::from_be_bytes(self.0[..u32_len].try_into().unwrap());
 
-        if self.0.len() < size as usize + 4 {
+        if self.0.len() < size as usize + u32_len {
             return None;
         }
 
-        self.0.drain(0..4); // remove size 4 bytes
+        self.0.drain(0..u32_len); // remove size 4 bytes
 
         Some((size, self.0.drain(0..size as usize).collect()))
     }
