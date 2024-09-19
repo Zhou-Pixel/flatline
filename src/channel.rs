@@ -5,6 +5,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use derive_new::new;
+use num_derive::FromPrimitive;
 use snafu::OptionExt;
 use std::cmp::min;
 use std::io;
@@ -34,12 +35,12 @@ impl ChannelOpenFailureReson {
     pub const RESOURCE_SHORTAGE: Self = Self(SSH_OPEN_RESOURCE_SHORTAGE);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Signal(pub String);
 
-impl ToString for Signal {
-    fn to_string(&self) -> String {
-        self.0.clone()
+impl std::fmt::Display for Signal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -319,7 +320,7 @@ impl Stream {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
 pub enum TerminalMode {
     // #[allow(non_camel_case_types)]
     // TTY_OP_END,

@@ -63,7 +63,7 @@ struct Endpoint {
     banner: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Userauth {
     Success,
     Failure(Vec<String>, bool),
