@@ -84,7 +84,7 @@ async fn main() {
 
     assert!(matches!(status, Userauth::Success));
 
-    let mut channel = session.channel_open_default().await.unwrap();
+    let channel = session.channel_open_default().await.unwrap();
 
     let (protocol, cookie, screen_number) = system_x11_protocol_cookie().await;
 

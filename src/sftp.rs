@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use derive_new::new;
+use num_enum::TryFromPrimitive;
 use snafu::OptionExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -270,28 +271,105 @@ bitflags! {
 }
 
 impl Permissions {
+    const MASK: u32 = !FileType::MASK;
     pub fn p0755() -> Self {
         Self::from_bits_retain(0o755)
     }
 }
 
-#[derive(new, Debug, Clone, Copy)]
+#[derive(new, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp {
     pub atime: u32,
     pub mtime: u32,
 }
 
-#[derive(new, Debug, Clone, Copy)]
+#[derive(new, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct User {
     pub uid: u32,
     pub gid: u32,
 }
 
-#[derive(new, Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+#[num_enum(error_type(name = Error, constructor = Self::invalid_file_type))]
+#[repr(u32)]
+pub enum FileType {
+    Directory = 0o40000,
+    CharacterDevice = 0o20000,
+    BlockDevice = 0o60000,
+    RegularFile = 0o100000,
+    FIFO = 0o10000,
+    SymbolicLink = 0o120000,
+    Socket = 0o140000,
+}
+
+impl FileType {
+    const MASK: u32 = 0o170000;
+    fn invalid_file_type(value: u32) -> Error {
+        builder::Protocol {
+            tip: format!("Invalid SFtp file type({})", value),
+        }
+        .build()
+    }
+}
+
+impl FileType {
+    pub fn is_directory(&self) -> bool {
+        matches!(self, Self::Directory)
+    }
+
+    pub fn is_character_device(&self) -> bool {
+        matches!(self, Self::CharacterDevice)
+    }
+
+    pub fn is_block_device(&self) -> bool {
+        matches!(self, Self::BlockDevice)
+    }
+
+    pub fn is_regular_file(&self) -> bool {
+        matches!(self, Self::RegularFile)
+    }
+
+    pub fn is_fifo(&self) -> bool {
+        matches!(self, Self::FIFO)
+    }
+
+    pub fn is_symbolic_link(&self) -> bool {
+        matches!(self, Self::SymbolicLink)
+    }
+
+    pub fn is_socket(&self) -> bool {
+        matches!(self, Self::Socket)
+    }
+}
+
+#[derive(new, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Property {
+    pub permissions: Permissions,
+    pub file_type: FileType,
+}
+
+impl TryFrom<u32> for Property {
+    type Error = Error;
+
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        Ok(Self::new(
+            Permissions::from_bits_truncate(value & Permissions::MASK),
+            (value & FileType::MASK).try_into()?,
+        ))
+    }
+}
+
+impl Property {
+    pub fn bits(&self) -> u32 {
+        self.permissions.bits() | self.file_type as u32
+    }
+}
+
+#[derive(new, Debug, Clone, PartialEq, Eq)]
 pub struct Attributes {
     pub size: Option<u64>,
     pub user: Option<User>,
-    pub permissions: Option<Permissions>,
+    pub property: Option<Property>,
     // atime mtime
     pub time: Option<Timestamp>,
     // extended_count: Option<u32>,
@@ -319,7 +397,7 @@ impl Attributes {
             tmp.put_u32(user.gid);
         }
 
-        if let Some(permissions) = self.permissions {
+        if let Some(permissions) = self.property {
             flags |= SSH_FILEXFER_ATTR_PERMISSIONS;
             tmp.put_u32(permissions.bits());
         }
@@ -364,7 +442,7 @@ impl Attributes {
 
         if flags & SSH_FILEXFER_ATTR_PERMISSIONS != 0 {
             let per = buffer.take_u32()?;
-            permissions = Some(Permissions::from_bits_retain(per))
+            permissions = Property::try_from(per).ok();
         }
 
         if flags & SSH_FILEXFER_ATTR_ACMODTIME != 0 {
@@ -509,7 +587,7 @@ impl Status {
             SSH_FX_NO_CONNECTION => Self::NoConnection,
             SSH_FX_CONNECTION_LOST => Self::ConnectionLost,
             SSH_FX_OP_UNSUPPORTED => Self::OpUnsupported,
-            _ => return Err(Error::invalid_format("Invalid Sftp status code")),
+            _ => return Err(Error::invalid_format("Invalid SFtp status code")),
         })
     }
 
@@ -1297,7 +1375,8 @@ impl SFtp {
         self.channel.flush().await?;
 
         for id in requests {
-            self.wait_for_status(id, Status::no_eof).await?;
+            // suppress warning in edition 2021, maybe error in edition 2024
+            let _: () = self.wait_for_status(id, Status::no_eof).await?;
         }
 
         Ok(())

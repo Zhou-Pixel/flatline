@@ -5,7 +5,8 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use derive_new::new;
-use num_derive::FromPrimitive;
+// use num_derive::FromPrimitive;
+use num_enum::TryFromPrimitive;
 use snafu::OptionExt;
 use std::cmp::min;
 use std::io;
@@ -320,7 +321,7 @@ impl Stream {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromPrimitive)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
 pub enum TerminalMode {
     // #[allow(non_camel_case_types)]
     // TTY_OP_END,
